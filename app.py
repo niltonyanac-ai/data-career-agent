@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import json
 import time
+import urllib.parse
 from pypdf import PdfReader
 from google import genai
 from google.genai import types
@@ -10,8 +11,13 @@ from pydantic import BaseModel, Field
 from typing import List
 from supabase import create_client, Client
 
-# Configuración de página con enfoque UX
-st.set_page_config(page_title="DataCareer AI", page_icon="💼", layout="wide")
+# Configuración de página con enfoque UX (Sin menús de desarrollo para evitar pop-ups)
+st.set_page_config(
+    page_title="DataCareer AI", 
+    page_icon="💼", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # Estilos CSS personalizados para mejorar el diseño de tarjetas y métricas
 st.markdown("""
@@ -28,7 +34,7 @@ SUPABASE_URL = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY") or os.environ.get("SUPABASE_KEY")
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
-@st.cache_resource
+# Conexión limpia sin decoradores de caché para evitar ventanas emergentes de "Clear Caches"
 def conectar_supabase():
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
@@ -71,6 +77,10 @@ def obtener_dataset_extenso():
     for i in range(6): 
         for r in roles_diversos:
             emp = empresas[(id_fake % len(empresas))]
+            # Creación de links dinámicos de búsqueda real en LinkedIn Perú
+            termino_busqueda = urllib.parse.quote(f"{r[0]} {emp}")
+            link_real = f"https://www.linkedin.com/jobs/search/?keywords={termino_busqueda}&location=Peru"
+            
             lote.append({
                 'id': id_fake,
                 'puesto': r[0],
@@ -79,7 +89,7 @@ def obtener_dataset_extenso():
                 'jerarquia': r[2],
                 'hard_skills': r[3],
                 'soft_skills': r[4],
-                'link': f'https://linkedin.com/jobs/view/{1000 + id_fake}' # Corregido enlace único libre de duplicaciones
+                'link': link_real
             })
             id_fake += 1
     return lote
@@ -92,31 +102,34 @@ def cargar_vacantes():
         respuesta = supabase.table("vacantes").select("*").execute()
         if respuesta.data and len(respuesta.data) >= 30:
             df_supa = pd.DataFrame(respuesta.data)
-            # Limpieza preventiva de enlaces en base de datos si vinieran concatenados
+            # Asegurar links reales funcionales si la base de datos no tiene enlaces válidos
             if 'link' in df_supa.columns:
-                df_supa['link'] = df_supa['link'].apply(lambda x: str(x).split("http")[1] if "http" in str(x) and str(x).count("http") > 1 else str(x))
+                df_supa['link'] = df_supa.apply(
+                    lambda r: f"https://www.linkedin.com/jobs/search/?keywords={urllib.parse.quote(str(r['puesto']) + ' ' + str(r['empresa']))}&location=Peru", 
+                    axis=1
+                )
             return df_supa
         else:
             return pd.DataFrame(dataset_local)
     except Exception:
         return pd.DataFrame(dataset_local)
 
-# Carga e inicialización de datos base
+# Carga directa de la información
 df_raw = cargar_vacantes()
 
-# Asegurar formato homogéneo de listas de habilidades para procesamiento analítico
+# Homogeneizar listas de habilidades técnicas y blandas
 for col in ['hard_skills', 'soft_skills']:
     if col in df_raw.columns:
         df_raw[col] = df_raw[col].apply(lambda x: x if isinstance(x, list) else (str(x).split(", ") if pd.notna(x) else []))
 
 # =========================================================================
-# 3. CONTROL DE FILTROS GLOBALES EN BARRA LATERAL (AUDITADO)
+# 3. CONTROL DE FILTROS GLOBALES EN BARRA LATERAL (AUDITADO Y REACTIVO)
 # =========================================================================
 st.sidebar.header("Filtros del Ecosistema")
 esp_disponibles = ['Todos'] + sorted(list(df_raw['especialidad'].unique()))
 filtro_esp = st.sidebar.selectbox("Especialidad Funcional", esp_disponibles)
 
-# Filtrado reactivo estricto
+# Filtrado reactivo estricto para sincronización de gráficos
 df_filtrado = df_raw.copy()
 if filtro_esp != 'Todos':
     df_filtrado = df_filtrado[df_filtrado['especialidad'] == filtro_esp]
@@ -146,25 +159,27 @@ with tab_mercado:
     
     col_g1, col_g2 = st.columns(2)
     with col_g1:
-        st.subheader("📊 Distribución por Nivel de Jerarquía (Mayor a Menor)")
+        st.subheader("📊 Distribución por Nivel de Jerarquía")
         if 'jerarquia' in df_filtrado.columns and not df_filtrado.empty:
-            # En gráficos verticales de Streamlit, sort_values(ascending=False) pone la mayor a la izquierda
+            # Gráfico vertical estándar de mayor a menor frecuencia
             st.bar_chart(df_filtrado['jerarquia'].value_counts().sort_values(ascending=False))
+            
     with col_g2:
-        st.subheader("🍩 Distribución por Especialidad Técnica (Mayor a Menor)")
+        st.subheader("🍩 Distribución por Especialidad Técnica (Orden Descendente)")
         if 'especialidad' in df_filtrado.columns and not df_filtrado.empty:
-            # En barras horizontales, ordenar con ascending=True coloca la barra más grande ARRIBA
+            # Forzar orden ascendente en pandas para que la barra más larga se pinte ARRIBA en modo horizontal
             st.bar_chart(df_filtrado['especialidad'].value_counts().sort_values(ascending=True), horizontal=True)
 
     col_s1, col_s2 = st.columns(2)
     with col_s1:
-        st.subheader("🛠️ Top 10 Hard Skills más Demandadas")
+        st.subheader("🛠️ Top 10 Hard Skills más Demandadas (Orden Descendente)")
         all_hard = [skill for sublist in df_filtrado['hard_skills'].dropna() for skill in sublist]
         if all_hard:
             top_hard = pd.Series(all_hard).value_counts().head(10).sort_values(ascending=True)
             st.bar_chart(top_hard, horizontal=True)
+            
     with col_s2:
-        st.subheader("🧠 Top Soft Skills Requeridas")
+        st.subheader("🧠 Top Soft Skills Requeridas (Orden Descendente)")
         all_soft = [skill for sublist in df_filtrado['soft_skills'].dropna() for skill in sublist]
         if all_soft:
             top_soft = pd.Series(all_soft).value_counts().head(10).sort_values(ascending=True)
@@ -178,7 +193,7 @@ with tab_mercado:
     st.dataframe(df_tabla[['puesto', 'empresa', 'especialidad', 'jerarquia', 'hard_skills', 'link']], use_container_width=True, hide_index=True)
 
 
-# PESTAÑA 2: MOTOR DE MATCH EN VIVO CON CONTROLADOR DE REINTENTOS PARA LÍMITES DE API
+# PESTAÑA 2: MOTOR DE MATCH EN VIVO CON ENLACES REALES REDIRECCIONABLES
 with tab_evaluador:
     st.header("Evaluador Inteligente de Perfil")
     st.write("Sube tu CV en formato PDF para medir de forma semántica tu nivel de coincidencia con las vacantes de la base de datos:")
@@ -186,100 +201,89 @@ with tab_evaluador:
     archivo_cv = st.file_uploader("Arrastra tu CV aquí (Formato PDF)", type=["pdf"])
     
     if archivo_cv is not None:
-        # Inicializar disparador en el estado de la sesión para permitir reintentos manuales tras error de cuota
-        if "ejecutar_match" not in st.session_state:
-            st.session_state.ejecutar_match = True
+        with st.spinner("🤖 Analizando afinidad semántica con Gemini IA..."):
+            try:
+                # A. Extraer texto plano del documento PDF
+                lector_pdf = PdfReader(archivo_cv)
+                texto_cv = ""
+                for pagina in lector_pdf.pages:
+                    texto_cv += pagina.extract_text() or ""
+                
+                if not texto_cv.strip():
+                    st.error("No se pudo extraer texto legible del PDF. Por favor verifica que no sea un documento escaneado.")
+                elif not GEMINI_API_KEY:
+                    st.error("Falta configurar la variable 'GEMINI_API_KEY' en los Secrets para activar el motor de IA.")
+                else:
+                    # B. Reducir el subset enviado para optimizar tokens y tiempos de respuesta
+                    df_unicas = df_raw.drop_duplicates(subset=['puesto', 'empresa']).head(15)
+                    lista_vacantes_prompt = []
+                    for idx, row in df_unicas.iterrows():
+                        lista_vacantes_prompt.append({
+                            "id_interno": int(row['id']),
+                            "puesto": str(row['puesto']),
+                            "empresa": str(row['empresa']),
+                            "hard_skills_requeridas": row['hard_skills'],
+                            "jerarquia": str(row['jerarquia'])
+                        })
 
-        if st.session_state.ejecutar_match:
-            with st.spinner("🤖 Analizando afinidad semántica con Gemini IA..."):
-                try:
-                    # A. Extraer texto plano del documento PDF
-                    lector_pdf = PdfReader(archivo_cv)
-                    texto_cv = ""
-                    for pagina in lector_pdf.pages:
-                        texto_cv += pagina.extract_text() or ""
+                    # C. Inicializar cliente oficial de GenAI usando Google SDK
+                    cliente_ai = genai.Client(api_key=GEMINI_API_KEY)
                     
-                    if not texto_cv.strip():
-                        st.error("No se pudo extraer texto legible del PDF. Por favor verifica que no sea un documento escaneado.")
-                    elif not GEMINI_API_KEY:
-                        st.error("Falta configurar la variable 'GEMINI_API_KEY' en los Secrets para activar el motor de IA.")
-                    else:
-                        # B. Reducir el subset enviado para optimizar tokens y tiempos de respuesta
-                        df_unicas = df_raw.drop_duplicates(subset=['puesto', 'empresa']).head(15)
-                        lista_vacantes_prompt = []
-                        for idx, row in df_unicas.iterrows():
-                            lista_vacantes_prompt.append({
-                                "id_interno": int(row['id']),
-                                "puesto": str(row['puesto']),
-                                "empresa": str(row['empresa']),
-                                "hard_skills_requeridas": row['hard_skills'],
-                                "jerarquia": str(row['jerarquia'])
-                            })
+                    prompt_sistema = (
+                        "Eres un experto en Recruiting Analytics. Evalúas compatibilidad técnica (0 a 100) basándote estrictamente en habilidades."
+                    )
+                    
+                    prompt_usuario = f"""
+                    Analiza el perfil del siguiente CV:
+                    ---
+                    {texto_cv}
+                    ---
+                    
+                    Calcula el porcentaje de compatibilidad frente a estas vacantes en el mercado peruano:
+                    {json.dumps(lista_vacantes_prompt, ensure_ascii=False)}
+                    """
 
-                        # C. Inicializar cliente oficial de GenAI usando Google SDK
-                        cliente_ai = genai.Client(api_key=GEMINI_API_KEY)
-                        
-                        prompt_sistema = (
-                            "Eres un experto en Recruiting Analytics. Evalúas compatibilidad técnica (0 a 100) basándote estrictamente en habilidades."
+                    # D. Llamada estructurada a Gemini API con Structured Output
+                    respuesta_ia = cliente_ai.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=prompt_usuario,
+                        config=types.GenerateContentConfig(
+                            system_instruction=prompt_sistema,
+                            temperature=0.1,
+                            response_mime_type="application/json",
+                            response_schema=RespuestaMatchIA,
                         )
-                        
-                        prompt_usuario = f"""
-                        Analiza el perfil del siguiente CV:
-                        ---
-                        {texto_cv}
-                        ---
-                        
-                        Calcula el porcentaje de compatibilidad frente a estas vacantes en el mercado peruano:
-                        {json.dumps(lista_vacantes_prompt, ensure_ascii=False)}
-                        """
-
-                        # D. Llamada estructurada a Gemini API
-                        respuesta_ia = cliente_ai.models.generate_content(
-                            model='gemini-2.5-flash',
-                            contents=prompt_usuario,
-                            config=types.GenerateContentConfig(
-                                system_instruction=prompt_sistema,
-                                temperature=0.1,
-                                response_mime_type="application/json",
-                                response_schema=RespuestaMatchIA,
-                            )
-                        )
-                        
-                        # E. Mapear y cruzar la respuesta limpia estructurada
-                        datos_objeto = json.loads(respuesta_ia.text)
-                        df_scores = pd.DataFrame(datos_objeto["evaluaciones"])
-                        df_resultados = df_raw.merge(df_scores, left_on='id', right_on='id_interno', how='inner')
-                        
-                        # Filtrar posiciones con Match mayor o igual al 70% en orden descendente estricto
-                        df_calificados = df_resultados[df_resultados['match_score'] >= 70].sort_values(by='match_score', ascending=False)
-                        
-                        st.markdown("### 🎯 Posiciones Recomendadas para Ti (Match ≥ 70%)")
-                        st.write(f"El motor identificó **{len(df_calificados)} oportunidades activas** donde cumples o superas los requisitos del puesto:")
-                        
-                        if not df_calificados.empty:
-                            for _, puesto_match in df_calificados.iterrows():
-                                st.markdown(f"""
-                                <div class="match-card">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                                        <h4 style="margin: 0; color: #1E3A8A; font-size: 18px;">{puesto_match['puesto']}</h4>
-                                        <span class="match-badge">MATCH {puesto_match['match_score']}%</span>
-                                    </div>
-                                    <p style="margin: 0 0 8px 0; font-size: 14px; color: #334155;"><b>Empresa:</b> {puesto_match['empresa']} | <b>Especialidad:</b> {puesto_match['especialidad']} | <b>Nivel:</b> {puesto_match['jerarquia']}</p>
-                                    <p style="margin: 0 0 12px 0; font-size: 13.5px; color: #475569;"><b>Habilidades Fuertes Coincidentes:</b> {puesto_match['coincidencias']}</p>
-                                    <a href="{puesto_match['link']}" target="_blank" style="color: #2563EB; font-weight: bold; font-size: 14px; text-decoration: none;">Postular en LinkedIn →</a>
+                    )
+                    
+                    # E. Mapear y cruzar la respuesta limpia estructurada
+                    datos_objeto = json.loads(respuesta_ia.text)
+                    df_scores = pd.DataFrame(datos_objeto["evaluaciones"])
+                    df_resultados = df_raw.merge(df_scores, left_on='id', right_on='id_interno', how='inner')
+                    
+                    # Filtrar posiciones con Match mayor o igual al 70% en orden descendente estricto
+                    df_calificados = df_resultados[df_resultados['match_score'] >= 70].sort_values(by='match_score', ascending=False)
+                    
+                    st.markdown("### 🎯 Posiciones Recomendadas para Ti (Match ≥ 70%)")
+                    st.write(f"El motor identificó **{len(df_calificados)} oportunidades activas** con enlaces de postulación directa en LinkedIn Perú:")
+                    
+                    if not df_calificados.empty:
+                        for _, puesto_match in df_calificados.iterrows():
+                            st.markdown(f"""
+                            <div class="match-card">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                    <h4 style="margin: 0; color: #1E3A8A; font-size: 18px;">{puesto_match['puesto']}</h4>
+                                    <span class="match-badge">MATCH {puesto_match['match_score']}%</span>
                                 </div>
-                                """, unsafe_allow_html=True)
-                        else:
-                            st.info("Tu perfil cuenta con excelentes habilidades, pero actualmente ninguna oferta supera el 70% de afinidad estricta en el lote analizado.")
-                            
-                except Exception as e:
-                    # Captura robusta y manejo UX elegante para el límite de cuota (Error 429)
-                    if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                        st.warning("⏳ **Límite de solicitudes temporales de la capa gratuita alcanzado (Máx 5/min).**")
-                        st.info("Para proteger tu experiencia, hemos preparado un botón de reintento automático. Por favor espera 6 segundos antes de presionarlo.")
-                        # Botón interactivo para restablecer el flujo
-                        if st.button("🔄 Reintentar Análisis Semántico"):
-                            time.sleep(1)
-                            st.rerun()
+                                <p style="margin: 0 0 8px 0; font-size: 14px; color: #334155;"><b>Empresa:</b> {puesto_match['empresa']} | <b>Especialidad:</b> {puesto_match['especialidad']} | <b>Nivel:</b> {puesto_match['jerarquia']}</p>
+                                <p style="margin: 0 0 12px 0; font-size: 13.5px; color: #475569;"><b>Habilidades Fuertes Coincidentes:</b> {puesto_match['coincidencias']}</p>
+                                <a href="{puesto_match['link']}" target="_blank" style="display: inline-block; background-color: #2563EB; color: white; padding: 6px 12px; border-radius: 5px; font-weight: bold; font-size: 13px; text-decoration: none;">Ver Ofertas Reales en LinkedIn →</a>
+                            </div>
+                            """, unsafe_allow_html=True)
                     else:
-                        st.error(f"Inconveniente en el procesamiento semántico del documento: {e}")
+                        st.info("Tu perfil cuenta con excelentes habilidades, pero actualmente ninguna oferta supera el 70% de afinidad estricta en el lote analizado.")
+                        
+            except Exception as e:
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    st.warning("⏳ **La API de Gemini está procesando múltiples consultas en la capa gratuita.** Por favor, espera 5 segundos y vuelve a interactuar con el cargador de archivos.")
+                else:
+                    st.error(f"Inconveniente en el procesamiento semántico del documento: {e}")
