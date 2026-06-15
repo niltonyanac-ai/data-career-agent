@@ -79,6 +79,7 @@ def obtener_data():
     for col in ['hard_skills', 'soft_skills']:
         df[col] = df[col].apply(lambda x: x.split(", ") if isinstance(x, str) else x)
     
+    # Generación de URLs dinámicas para LinkedIn
     df['link'] = df.apply(lambda r: f"https://www.linkedin.com/jobs/search/?keywords={urllib.parse.quote(str(r['puesto']) + ' ' + str(r['empresa']))}&location=Peru", axis=1)
     
     return df
@@ -153,9 +154,15 @@ with tab1:
     df_visor = df_f[['puesto', 'empresa', 'especialidad', 'jerarquia', 'hard_skills', 'link']].copy()
     df_visor['hard_skills'] = df_visor['hard_skills'].apply(lambda x: ", ".join(x) if isinstance(x, list) else x)
     
+    # AQUÍ ESTÁ LA MAGIA PARA LOS ENLACES CON UN CLIC
     st.dataframe(
         df_visor,
-        column_config={"link": st.column_config.LinkColumn("Enlace LinkedIn")},
+        column_config={
+            "link": st.column_config.LinkColumn(
+                "Enlace de Postulación", 
+                display_text="🔗 Ver en LinkedIn"
+            )
+        },
         use_container_width=True, 
         hide_index=True
     )
@@ -177,8 +184,9 @@ with tab2:
                     
                     df_prompt = df_f[['id', 'puesto', 'empresa', 'hard_skills']].copy()
                     
+                    # CAMBIO DE MODELO A LA VERSIÓN EXTENDIDA 'LATEST' PARA EVITAR EL ERROR 404
                     respuesta_ia = cliente_ai.models.generate_content(
-                        model='gemini-1.5-flash', 
+                        model='gemini-1.5-flash-latest', 
                         contents=f"Evalúa la compatibilidad de este CV:\n{texto_cv[:3000]}\n\nContra estas vacantes:\n{df_prompt.to_json(orient='records')}",
                         config=types.GenerateContentConfig(
                             system_instruction="Eres un headhunter técnico. Retorna los resultados en formato JSON exacto según el esquema provisto.",
