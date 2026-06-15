@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 import urllib.parse
+import altair as alt
 from pypdf import PdfReader
 from google import genai
 from google.genai import types
@@ -35,7 +36,7 @@ class RespuestaMatchIA(BaseModel):
     evaluaciones: List[EvaluacionIndividual]
 
 # -----------------------------------------------------------------------------
-# 3. MOTOR DE DATOS (Forzado a simulación local para visualizar multiespecialidad)
+# 3. MOTOR DE DATOS (Forzado a simulación local)
 # -----------------------------------------------------------------------------
 def obtener_data():
     # CONEXIÓN A SUPABASE COMENTADA PARA FORZAR DATOS DE PRUEBA
@@ -45,7 +46,6 @@ def obtener_data():
     #     df = pd.DataFrame(res.data)
     # except:
     
-    # Respaldo de alta densidad (Asegura volumen y diversidad sin colapsar RAM)
     roles = [
         ("Data Scientist", "Data Science", "Senior", ["Python", "SQL", "Machine Learning"], ["Liderazgo", "Comunicación"]),
         ("Data Engineer", "Data Engineering", "Semi-Senior", ["Spark", "AWS", "Python"], ["Proactividad", "Trabajo en equipo"]),
@@ -62,10 +62,10 @@ def obtener_data():
     
     lote = []
     id_counter = 1
-    for i in range(15):  # 15 iteraciones x 11 roles = 165 registros
+    for i in range(15):  
         for r in roles:
             lote.append({
-                'id': id_counter,  # ID único garantizado como entero
+                'id': id_counter,  
                 'puesto': r[0],
                 'empresa': f"Corporación Data Latam {i+1}",
                 'especialidad': r[1],
@@ -76,11 +76,9 @@ def obtener_data():
             id_counter += 1
     df = pd.DataFrame(lote)
 
-    # Transformaciones Críticas para Interfaz
     for col in ['hard_skills', 'soft_skills']:
         df[col] = df[col].apply(lambda x: x.split(", ") if isinstance(x, str) else x)
     
-    # Generación del Link Real (Nunca correlativo, basado en texto web-safe)
     df['link'] = df.apply(lambda r: f"https://www.linkedin.com/jobs/search/?keywords={urllib.parse.quote(str(r['puesto']) + ' ' + str(r['empresa']))}&location=Peru", axis=1)
     
     return df
@@ -88,7 +86,7 @@ def obtener_data():
 df_raw = obtener_data()
 
 # -----------------------------------------------------------------------------
-# 4. BARRA LATERAL Y FILTROS ESTRUCTURALES
+# 4. BARRA LATERAL Y FILTROS
 # -----------------------------------------------------------------------------
 st.title("💼 DataCareer AI")
 st.sidebar.header("Filtros del Mercado")
@@ -103,30 +101,51 @@ df_f = df_raw if filtro == "Todos" else df_raw[df_raw['especialidad'] == filtro]
 # -----------------------------------------------------------------------------
 tab1, tab2 = st.tabs(["📊 Inteligencia de Mercado", "🔍 Evaluador Inteligente de CV"])
 
-# PESTAÑA 1: GRÁFICOS ORDENADOS Y LISTADO INFERIOR
 with tab1:
     st.markdown(f"### Análisis de {len(df_f)} ofertas activas")
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("Jerarquías (Descendente)")
-        st.bar_chart(df_f['jerarquia'].value_counts().sort_values(ascending=False))
+        df_jerarquia = df_f['jerarquia'].value_counts().reset_index()
+        df_jerarquia.columns = ['Jerarquía', 'Cantidad']
+        chart_jer = alt.Chart(df_jerarquia).mark_bar().encode(
+            x=alt.X('Jerarquía:N', sort='-y'),
+            y=alt.Y('Cantidad:Q')
+        )
+        st.altair_chart(chart_jer, use_container_width=True)
         
         st.subheader("Hard Skills Más Demandadas")
         hard_skills_flat = [skill for sublist in df_f['hard_skills'] if isinstance(sublist, list) for skill in sublist]
         if hard_skills_flat:
-            top_hard = pd.Series(hard_skills_flat).value_counts().head(10).sort_values(ascending=True)
-            st.bar_chart(top_hard, horizontal=True)
+            df_hard = pd.Series(hard_skills_flat).value_counts().head(10).reset_index()
+            df_hard.columns = ['Hard Skill', 'Cantidad']
+            chart_hard = alt.Chart(df_hard).mark_bar().encode(
+                x=alt.X('Cantidad:Q'),
+                y=alt.Y('Hard Skill:N', sort='-x')
+            )
+            st.altair_chart(chart_hard, use_container_width=True)
 
     with col2:
         st.subheader("Especialidad (Descendente)")
-        st.bar_chart(df_f['especialidad'].value_counts().sort_values(ascending=True), horizontal=True)
+        df_esp = df_f['especialidad'].value_counts().reset_index()
+        df_esp.columns = ['Especialidad', 'Cantidad']
+        chart_esp = alt.Chart(df_esp).mark_bar().encode(
+            x=alt.X('Cantidad:Q'),
+            y=alt.Y('Especialidad:N', sort='-x')
+        )
+        st.altair_chart(chart_esp, use_container_width=True)
         
         st.subheader("Soft Skills Más Demandadas")
         soft_skills_flat = [skill for sublist in df_f['soft_skills'] if isinstance(sublist, list) for skill in sublist]
         if soft_skills_flat:
-            top_soft = pd.Series(soft_skills_flat).value_counts().head(10).sort_values(ascending=True)
-            st.bar_chart(top_soft, horizontal=True)
+            df_soft = pd.Series(soft_skills_flat).value_counts().head(10).reset_index()
+            df_soft.columns = ['Soft Skill', 'Cantidad']
+            chart_soft = alt.Chart(df_soft).mark_bar().encode(
+                x=alt.X('Cantidad:Q'),
+                y=alt.Y('Soft Skill:N', sort='-x')
+            )
+            st.altair_chart(chart_soft, use_container_width=True)
 
     st.markdown("---")
     st.subheader("📋 Registro Completo de Oportunidades")
@@ -141,7 +160,6 @@ with tab1:
         hide_index=True
     )
 
-# PESTAÑA 2: MOTOR DE MATCH IA Y ENSAMBLAJE DE LINKS
 with tab2:
     st.markdown("### Evaluador Semántico de Empleabilidad")
     archivo = st.file_uploader("Sube tu CV (Formato PDF)", type="pdf")
@@ -159,7 +177,6 @@ with tab2:
                     
                     df_prompt = df_f[['id', 'puesto', 'empresa', 'hard_skills']].copy()
                     
-                    # EJECUCIÓN DEL LLM: CAMBIO A GEMINI-1.5-FLASH PARA ESTABILIDAD Y EVITAR ERROR 503
                     respuesta_ia = cliente_ai.models.generate_content(
                         model='gemini-1.5-flash', 
                         contents=f"Evalúa la compatibilidad de este CV:\n{texto_cv[:3000]}\n\nContra estas vacantes:\n{df_prompt.to_json(orient='records')}",
