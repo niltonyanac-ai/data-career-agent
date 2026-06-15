@@ -1,0 +1,28 @@
+name: Actualizacion Automatica de Vacantes
+
+on:
+  schedule:
+    # 12:00 UTC corresponde a las 7:00 AM hora de Perú (UTC-5)
+    - cron: '0 12 * * 1'
+  workflow_dispatch: # Esto nos activa un botón para probarlo manualmente cuando queramos
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar Repositorio
+        uses: actions/checkout@v3
+
+      - name: Inicializar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalar Dependencias
+        run: pip install requests beautifulsoup4 supabase
+
+      - name: Ejecutar Extractor de Mercado
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python scraper.py
