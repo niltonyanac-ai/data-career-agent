@@ -159,9 +159,9 @@ with tab2:
                     
                     df_prompt = df_f[['id', 'puesto', 'empresa', 'hard_skills']].copy()
                     
-                    # EJECUCIÓN DEL LLM: CAMBIO A GEMINI-2.0-FLASH PARA EVITAR ERROR 503
+                    # EJECUCIÓN DEL LLM: CAMBIO A GEMINI-1.5-FLASH PARA ESTABILIDAD Y EVITAR ERROR 503
                     respuesta_ia = cliente_ai.models.generate_content(
-                        model='gemini-2.0-flash', 
+                        model='gemini-1.5-flash', 
                         contents=f"Evalúa la compatibilidad de este CV:\n{texto_cv[:3000]}\n\nContra estas vacantes:\n{df_prompt.to_json(orient='records')}",
                         config=types.GenerateContentConfig(
                             system_instruction="Eres un headhunter técnico. Retorna los resultados en formato JSON exacto según el esquema provisto.",
