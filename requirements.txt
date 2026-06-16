@@ -1,6 +1,7 @@
-plotly
+streamlit
 pandas
+altair
 pypdf
 google-genai
-supabase
-streamlit
+pydantic
+python-docx
