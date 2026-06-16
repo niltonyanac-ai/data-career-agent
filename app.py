@@ -27,8 +27,7 @@ class EvaluacionIndividual(BaseModel):
 class RespuestaMatchIA(BaseModel):
     evaluaciones: List[EvaluacionIndividual]
 
-# --- 1. Motor de Datos ---
-@st.cache_data(show_spinner=False)
+# --- 1. Motor de Datos (Sin cache para evitar conflicto mientras desarrollas) ---
 def obtener_data():
     roles_config = [
         ("Data Scientist", "Data Science", "Senior", ["Python", "SQL", "ML"], ["Liderazgo"], 0.15),
@@ -41,80 +40,59 @@ def obtener_data():
     data = []
     for i in range(250):
         r = random.choices(roles_config, weights=[item[5] for item in roles_config])[0]
-        # Generar fechas reales para que el filtro funcione
-        dias_aleatorios = random.randint(0, 90)
-        fecha = datetime.now() - timedelta(days=dias_aleatorios)
-        data.append({
-            'id': i + 1, 'puesto': r[0], 'especialidad': r[1], 'jerarquia': r[2], 
-            'hard_skills': r[3], 'soft_skills': r[4], 'fecha_publicacion': fecha
-        })
-    df = pd.DataFrame(data)
-    df['Postular'] = df.apply(lambda r: f"https://www.linkedin.com/jobs/search/?keywords={urllib.parse.quote(r['puesto'])}", axis=1)
-    return df
+        fecha = datetime.now() - timedelta(days=random.randint(0, 90))
+        data.append({'id': i + 1, 'puesto': r[0], 'especialidad': r[1], 'jerarquia': r[2], 
+                     'hard_skills': r[3], 'soft_skills': r[4], 'fecha_publicacion': fecha})
+    return pd.DataFrame(data)
 
 df_raw = obtener_data()
 
-# --- 2. Lógica de lectura de archivos ---
+# --- 2. Lógica de archivos ---
 def procesar_archivo(archivo):
     try:
-        if archivo.name.endswith('.pdf'):
-            reader = PdfReader(archivo)
-            return "".join([p.extract_text() for p in reader.pages])
-        elif archivo.name.endswith('.docx') and docx:
-            doc = docx.Document(archivo)
-            return "\n".join([para.text for para in doc.paragraphs])
-        elif archivo.name.endswith('.txt'):
+        if archivo.type == "application/pdf":
+            return "".join([p.extract_text() for p in PdfReader(archivo).pages])
+        elif "wordprocessingml" in archivo.type and docx:
+            return "\n".join([para.text for para in docx.Document(archivo).paragraphs])
+        else:
             return archivo.getvalue().decode("utf-8")
-    except Exception as e:
-        st.error(f"Error al leer archivo: {e}")
-    return None
+    except Exception: return None
 
-# --- 3. Interfaz ---
+# --- 3. UI ---
 st.title("💼 DataCareer AI: Termómetro Laboral")
 tab1, tab2 = st.tabs(["📊 Mercado", "🔍 Evaluador de CV"])
 
 with tab1:
-    st.sidebar.header("⚙️ Filtros")
     filtro_esp = st.sidebar.selectbox("Especialidad", ["Todos"] + sorted(list(df_raw['especialidad'].unique())))
-    dias_antiguedad = st.sidebar.slider("Antigüedad máxima (días):", 1, 90, 90)
+    dias = st.sidebar.slider("Antigüedad (días)", 1, 90, 90)
     
-    # Aplicar filtros (Ordenados por fecha más reciente)
     df_f = df_raw.copy()
-    if filtro_esp != "Todos":
-        df_f = df_f[df_f['especialidad'] == filtro_esp]
+    if filtro_esp != "Todos": df_f = df_f[df_f['especialidad'] == filtro_esp]
+    df_f = df_f[df_f['fecha_publicacion'] >= (datetime.now() - timedelta(days=dias))]
     
-    limite = datetime.now() - timedelta(days=dias_antiguedad)
-    df_f = df_f[df_f['fecha_publicacion'] >= limite].sort_values(by='fecha_publicacion', ascending=False)
-    
-    # Gráficos REINCORPORADOS
+    # 4 GRÁFICOS RESTAURADOS
     c1, c2 = st.columns(2)
     with c1:
-        st.subheader("Hard Skills en Demanda")
+        st.altair_chart(alt.Chart(df_f['jerarquia'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('jerarquia:N', sort='-x')), use_container_width=True)
         st.altair_chart(alt.Chart(df_f.explode('hard_skills')['hard_skills'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('hard_skills:N', sort='-x')), use_container_width=True)
     with c2:
-        st.subheader("Especialidad")
         st.altair_chart(alt.Chart(df_f['especialidad'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('especialidad:N', sort='-x')), use_container_width=True)
-    
-    st.dataframe(df_f.drop(columns=['id']), column_config={"Postular": st.column_config.LinkColumn("Acción", display_text="Ver oferta")}, use_container_width=True)
+        st.altair_chart(alt.Chart(df_f.explode('soft_skills')['soft_skills'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('soft_skills:N', sort='-x')), use_container_width=True)
+
+    st.dataframe(df_f, use_container_width=True)
 
 with tab2:
-    archivo = st.file_uploader("Sube tu CV (PDF, DOCX, TXT)", type=['pdf', 'docx', 'txt'])
+    archivo = st.file_uploader("Sube tu CV", type=['pdf', 'docx', 'txt'])
     if archivo:
         texto = procesar_archivo(archivo)
         if texto:
-            try:
-                cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-                with st.spinner("Analizando match >70%..."):
-                    resp = cliente.models.generate_content(
-                        model='gemini-1.0-pro', 
-                        contents=f"Evalúa CV: {texto[:1500]}. Filtra y muestra solo vacantes con MATCH > 70%. Datos: {df_f.head(15).to_json()}", 
-                        config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=RespuestaMatchIA)
-                    )
-                    for res in json.loads(resp.text)['evaluaciones']:
-                        m = df_f[df_f['id'] == res['id_interno']]
-                        if not m.empty:
-                            with st.container(border=True):
-                                st.success(f"Match: {res['match_score']}% | {m.iloc[0]['puesto']}")
-                                st.link_button("🔗 Ver Oferta en LinkedIn", m.iloc[0]['Postular'])
-            except Exception as e:
-                st.error("Error al procesar el archivo. Revisa tu API Key.")
+            cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+            resp = cliente.models.generate_content(
+                model='gemini-1.0-pro', 
+                contents=f"Evalúa CV: {texto[:1000]}. Filtra datos: {df_f.head(10).to_json()}",
+                config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=RespuestaMatchIA)
+            )
+            for res in json.loads(resp.text)['evaluaciones']:
+                m = df_f[df_f['id'] == res['id_interno']]
+                if not m.empty:
+                    st.success(f"Match: {res['match_score']}% | {m.iloc[0]['puesto']}")
