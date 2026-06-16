@@ -5,3 +5,6 @@ pypdf
 google-genai
 pydantic
 python-docx
+supabase
+requests
+beautifulsoup4
