@@ -3,15 +3,21 @@ import pandas as pd
 import json
 import urllib.parse
 import altair as alt
-import docx  # Requiere: pip install python-docx
 from pypdf import PdfReader
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
 from typing import List
 
+# Importación segura (la librería se llama python-docx, el módulo es docx)
+try:
+    import docx
+except ImportError:
+    docx = None
+
 st.set_page_config(page_title="DataCareer AI", layout="wide", page_icon="💼")
 
+# --- ESQUEMAS ---
 class EvaluacionIndividual(BaseModel):
     id_interno: int
     match_score: int
@@ -20,15 +26,15 @@ class EvaluacionIndividual(BaseModel):
 class RespuestaMatchIA(BaseModel):
     evaluaciones: List[EvaluacionIndividual]
 
-@st.cache_data
-def obtener_data():
-    # Catálogo expandido de especialidades
+# --- MOTOR DE DATOS (Nueva versión para evitar conflicto de caché) ---
+@st.cache_data(show_spinner=False)
+def cargar_ofertas_v2():
     roles = [
         ("Data Scientist", "Data Science", "Senior", ["Python", "SQL", "ML"], ["Liderazgo"]),
-        ("MLOps Engineer", "MLOps", "Senior", ["Kubernetes", "Docker", "Python"], ["Agilidad"]),
-        ("Estadístico", "Estadística", "Semi-Senior", ["R", "Python", "SQL"], ["Analítica"]),
+        ("MLOps Engineer", "MLOps", "Senior", ["Kubernetes", "Docker"], ["Agilidad"]),
+        ("Estadístico", "Estadística", "Semi-Senior", ["R", "Python"], ["Analítica"]),
         ("Especialista BI", "Business Intelligence", "Junior", ["Power BI", "SQL"], ["Comunicación"]),
-        ("Analista Inteligencia Comercial", "Inteligencia Comercial", "Mid", ["Excel", "SQL", "CRM"], ["Negocio"])
+        ("Analista Inteligencia Comercial", "Inteligencia Comercial", "Mid", ["Excel", "SQL"], ["Negocio"])
     ]
     data = []
     for i in range(40):
@@ -38,53 +44,50 @@ def obtener_data():
     df['Postular'] = df.apply(lambda r: f"https://www.linkedin.com/jobs/search/?keywords={urllib.parse.quote(r['puesto'])}", axis=1)
     return df
 
-df_raw = obtener_data()
+df_raw = cargar_ofertas_v2()
 
-# Lógica de lectura de archivos múltiples
+# --- LECTURA DE ARCHIVOS ---
 def leer_archivo(archivo):
-    if archivo.name.endswith('.pdf'):
-        reader = PdfReader(archivo)
-        return "".join([p.extract_text() for p in reader.pages])
-    elif archivo.name.endswith('.docx'):
-        doc = docx.Document(archivo)
-        return "\n".join([para.text for para in doc.paragraphs])
-    elif archivo.name.endswith('.txt'):
-        return archivo.getvalue().decode("utf-8")
+    try:
+        if archivo.name.endswith('.pdf'):
+            reader = PdfReader(archivo)
+            return "\n".join([p.extract_text() for p in reader.pages])
+        elif archivo.name.endswith('.docx'):
+            if docx:
+                doc = docx.Document(archivo)
+                return "\n".join([para.text for para in doc.paragraphs])
+            else:
+                return "Error: Librería docx no instalada."
+        elif archivo.name.endswith('.txt'):
+            return archivo.getvalue().decode("utf-8")
+    except Exception:
+        return ""
     return ""
 
-# Interfaz
-st.title("💼 DataCareer AI: Inteligencia Laboral")
+# --- UI ---
+st.title("💼 DataCareer AI")
 tab1, tab2 = st.tabs(["📊 Mercado", "🔍 Evaluador de CV"])
 
 with tab1:
     filtro = st.sidebar.selectbox("Especialidad", ["Todos"] + sorted(list(df_raw['especialidad'].unique())))
     df_f = df_raw if filtro == "Todos" else df_raw[df_raw['especialidad'] == filtro]
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.altair_chart(alt.Chart(df_f.explode('hard_skills')['hard_skills'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y='hard_skills:N'), use_container_width=True)
-    with col2:
-        st.altair_chart(alt.Chart(df_f.explode('soft_skills')['soft_skills'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y='soft_skills:N'), use_container_width=True)
-    st.dataframe(df_f.drop(columns=['id']), column_config={"Postular": st.column_config.LinkColumn("Acción", display_text="Ver oferta")}, use_container_width=True)
+    st.dataframe(df_f.drop(columns=['id']), use_container_width=True)
 
 with tab2:
-    archivo = st.file_uploader("Cargar CV (PDF, DOCX, TXT)", type=['pdf', 'docx', 'txt'])
+    archivo = st.file_uploader("Cargar CV", type=['pdf', 'docx', 'txt'])
     if archivo:
         texto = leer_archivo(archivo)
         if texto:
             try:
                 cliente_ai = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-                with st.spinner("Analizando perfil..."):
-                    resp = cliente_ai.models.generate_content(
-                        model='gemini-1.0-pro',
-                        contents=f"CV: {texto[:2000]}. Filtra vacantes con >70% match. Datos: {df_f.head(10).to_json()}",
-                        config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=RespuestaMatchIA)
-                    )
-                    for res in json.loads(resp.text)['evaluaciones']:
-                        match = df_f[df_f['id'] == res['id_interno']]
-                        if not match.empty:
-                            info = match.iloc[0]
-                            st.success(f"Match: {res['match_score']}% - {info['puesto']}")
-                            st.link_button("🔗 Ver Oferta", info['Postular'])
+                resp = cliente_ai.models.generate_content(
+                    model='gemini-1.0-pro',
+                    contents=f"CV: {texto[:1500]}. Solo vacantes >70% match. Datos: {df_f.head(10).to_json()}",
+                    config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=RespuestaMatchIA)
+                )
+                for res in json.loads(resp.text)['evaluaciones']:
+                    match = df_f[df_f['id'] == res['id_interno']]
+                    if not match.empty:
+                        st.success(f"Match: {res['match_score']}% - {match.iloc[0]['puesto']}")
             except Exception as e:
-                st.error("Error al procesar el documento.")
+                st.error("Error al procesar el archivo.")
