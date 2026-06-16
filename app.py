@@ -13,6 +13,7 @@ from typing import List
 
 st.set_page_config(page_title="DataCareer AI", layout="wide", page_icon="💼")
 
+# --- Esquemas ---
 class EvaluacionIndividual(BaseModel):
     id_interno: int
     match_score: int
@@ -21,6 +22,7 @@ class EvaluacionIndividual(BaseModel):
 class RespuestaMatchIA(BaseModel):
     evaluaciones: List[EvaluacionIndividual]
 
+# --- 1. Motor de Datos ---
 def obtener_data():
     roles_config = [
         ("Data Scientist", "Data Science", "Senior", ["Python", "SQL"], ["Liderazgo"], 0.15),
@@ -44,10 +46,12 @@ def obtener_data():
 
 df_raw = obtener_data()
 
+# --- 2. Interfaz ---
 st.title("💼 DataCareer AI")
 tab1, tab2 = st.tabs(["📊 Mercado", "🔍 Evaluador de CV"])
 
 with tab1:
+    st.sidebar.header("⚙️ Filtros")
     filtro_esp = st.sidebar.selectbox("Especialidad", ["Todos"] + sorted(list(df_raw['especialidad'].unique())))
     dias = st.sidebar.slider("Antigüedad (días)", 1, 90, 90)
     
@@ -55,7 +59,6 @@ with tab1:
     if filtro_esp != "Todos": df_f = df_f[df_f['especialidad'] == filtro_esp]
     df_f = df_f[df_f['fecha'] >= (datetime.now() - timedelta(days=dias))]
     
-    # 4 Gráficos restaurados
     col1, col2 = st.columns(2)
     with col1:
         st.altair_chart(alt.Chart(df_f['jerarquia'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('jerarquia:N', sort='-x')), use_container_width=True)
@@ -69,25 +72,31 @@ with tab1:
 with tab2:
     archivo = st.file_uploader("Sube tu CV (PDF/TXT)", type=['pdf', 'txt'])
     if archivo:
-        # Lectura real de PDF
-        texto = ""
-        if archivo.type == "application/pdf":
-            texto = "".join([p.extract_text() for p in PdfReader(archivo).pages])
-        else:
-            texto = archivo.getvalue().decode("utf-8", errors="ignore")
-            
-        try:
-            cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-            resp = cliente.models.generate_content(
-                model='gemini-2.0-flash',
-                contents=f"Evalúa CV: {texto[:1500]}. Filtra ofertas con Match > 70% de: {df_f.head(20).to_json()}",
-                config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=RespuestaMatchIA)
-            )
-            for item in json.loads(resp.text)['evaluaciones']:
-                match = df_f[df_f['id'] == item['id_interno']]
-                if not match.empty:
-                    with st.container(border=True):
-                        st.write(f"### Match: {item['match_score']}% - {match.iloc[0]['puesto']}")
-                        st.link_button("🔗 Ver Oferta en LinkedIn", match.iloc[0]['Link'])
-        except Exception as e:
-            st.error(f"Error: {e}")
+        # Botón para activar IA (Previene errores 429 por llamadas automáticas)
+        if st.button("Evaluar compatibilidad con ofertas"):
+            texto = ""
+            if archivo.type == "application/pdf":
+                texto = "".join([p.extract_text() for p in PdfReader(archivo).pages])
+            else:
+                texto = archivo.getvalue().decode("utf-8", errors="ignore")
+                
+            try:
+                cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+                with st.spinner("Analizando matches con IA..."):
+                    resp = cliente.models.generate_content(
+                        model='gemini-1.5-flash', # Más estable para cuotas gratuitas
+                        contents=f"Evalúa CV: {texto[:1500]}. Filtra ofertas con Match > 70% de: {df_f.head(20).to_json()}",
+                        config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=RespuestaMatchIA)
+                    )
+                    res_data = json.loads(resp.text)
+                    for item in res_data['evaluaciones']:
+                        match = df_f[df_f['id'] == item['id_interno']]
+                        if not match.empty:
+                            with st.container(border=True):
+                                st.write(f"### Match: {item['match_score']}% - {match.iloc[0]['puesto']}")
+                                st.link_button("🔗 Ver Oferta en LinkedIn", match.iloc[0]['Link'])
+            except Exception as e:
+                if "429" in str(e):
+                    st.warning("⚠️ Límite de cuota excedido. Espera unos segundos e intenta de nuevo.")
+                else:
+                    st.error(f"Error técnico: {e}")
