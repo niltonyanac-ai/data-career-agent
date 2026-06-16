@@ -59,6 +59,7 @@ with tab1:
     if filtro_esp != "Todos": df_f = df_f[df_f['especialidad'] == filtro_esp]
     df_f = df_f[df_f['fecha'] >= (datetime.now() - timedelta(days=dias))]
     
+    # 4 Gráficos fijos
     col1, col2 = st.columns(2)
     with col1:
         st.altair_chart(alt.Chart(df_f['jerarquia'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('jerarquia:N', sort='-x')), use_container_width=True)
@@ -72,19 +73,23 @@ with tab1:
 with tab2:
     archivo = st.file_uploader("Sube tu CV (PDF/TXT)", type=['pdf', 'txt'])
     if archivo:
-        # Botón para activar IA (Previene errores 429 por llamadas automáticas)
         if st.button("Evaluar compatibilidad con ofertas"):
             texto = ""
             if archivo.type == "application/pdf":
-                texto = "".join([p.extract_text() for p in PdfReader(archivo).pages])
+                try:
+                    reader = PdfReader(archivo)
+                    texto = "".join([p.extract_text() for p in reader.pages])
+                except Exception as e:
+                    st.error(f"Error leyendo PDF: {e}")
             else:
                 texto = archivo.getvalue().decode("utf-8", errors="ignore")
                 
             try:
+                # Intenta con un modelo más estándar o genérico
                 cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
                 with st.spinner("Analizando matches con IA..."):
                     resp = cliente.models.generate_content(
-                        model='gemini-1.5-flash', # Más estable para cuotas gratuitas
+                        model='gemini-1.5-flash', 
                         contents=f"Evalúa CV: {texto[:1500]}. Filtra ofertas con Match > 70% de: {df_f.head(20).to_json()}",
                         config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=RespuestaMatchIA)
                     )
@@ -96,7 +101,4 @@ with tab2:
                                 st.write(f"### Match: {item['match_score']}% - {match.iloc[0]['puesto']}")
                                 st.link_button("🔗 Ver Oferta en LinkedIn", match.iloc[0]['Link'])
             except Exception as e:
-                if "429" in str(e):
-                    st.warning("⚠️ Límite de cuota excedido. Espera unos segundos e intenta de nuevo.")
-                else:
-                    st.error(f"Error técnico: {e}")
+                st.error(f"Error técnico de IA: {e}. Verifica si el modelo está habilitado en tu región o clave.")
