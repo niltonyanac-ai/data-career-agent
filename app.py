@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import json
-import urllib.parse
 import altair as alt
 from datetime import datetime, timedelta
 from pypdf import PdfReader
@@ -22,22 +21,20 @@ class EvaluacionIndividual(BaseModel):
 class RespuestaMatchIA(BaseModel):
     evaluaciones: List[EvaluacionIndividual]
 
-# --- Conexión Nativa a Supabase ---
-@st.cache_data(ttl=3600, show_spinner="Cargando ofertas del mercado real...")
+# --- Conexión Nativa a Supabase con Caché en Tiempo Real ---
+@st.cache_data(ttl=5, show_spinner="Cargando ofertas del mercado real...")
 def obtener_data_real():
     try:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
         supabase: Client = create_client(url, key)
         
-        # Descarga masiva de vacantes desde la tabla oficial
         respuesta = supabase.table("vacantes").select("*").execute()
         df = pd.DataFrame(respuesta.data)
         
         if df.empty:
             return pd.DataFrame(columns=['id', 'puesto', 'empresa', 'especialidad', 'jerarquia', 'hard_skills', 'soft_skills', 'link', 'fecha_creacion'])
         
-        # Parseo correcto de la fecha con formato UTC de Supabase
         df['fecha_creacion'] = pd.to_datetime(df['fecha_creacion'])
         return df
     except Exception as e:
@@ -58,7 +55,6 @@ else:
         filtro_esp = st.sidebar.selectbox("Especialidad", ["Todos"] + sorted(list(df_raw['especialidad'].unique())))
         dias = st.sidebar.slider("Antigüedad (días)", 1, 90, 90)
         
-        # Filtrado reactivo sobre datos de Supabase
         df_f = df_raw.copy()
         if filtro_esp != "Todos": 
             df_f = df_f[df_f['especialidad'] == filtro_esp]
@@ -77,7 +73,6 @@ else:
                 st.altair_chart(alt.Chart(df_f['especialidad'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('especialidad:N', sort='-x')), use_container_width=True)
                 st.altair_chart(alt.Chart(df_f.explode('soft_skills')['soft_skills'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('soft_skills:N', sort='-x')), use_container_width=True)
 
-            # Mapeo y visualización de la tabla limpia apuntando al 'link' en minúscula
             st.dataframe(
                 df_f.drop(columns=['id']), 
                 column_config={"link": st.column_config.LinkColumn("Postular", display_text="Ver oferta")}, 
@@ -87,7 +82,12 @@ else:
     with tab2:
         archivo = st.file_uploader("Sube tu CV (PDF/TXT)", type=['pdf', 'txt'])
         if archivo:
-            if st.button("Evaluar compatibilidad con ofertas"):
+            if "procesando_cv" not in st.session_state:
+                st.session_state.procesando_cv = False
+
+            boton_deshabilitado = st.session_state.procesando_cv
+
+            if st.button("Evaluar compatibilidad con ofertas", disabled=boton_deshabilitado):
                 texto = ""
                 if archivo.type == "application/pdf":
                     try:
@@ -102,17 +102,25 @@ else:
                     st.warning("El documento cargado no contiene texto legible.")
                 else:
                     try:
+                        st.session_state.procesando_cv = True
                         cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-                        with st.spinner("Analizando afinidad con IA..."):
-                            # Empaquetamos los primeros 25 registros para el análisis de contexto
-                            contexto_ofertas = df_f.head(25)[['id', 'puesto', 'especialidad', 'jerarquia', 'hard_skills']].to_json(orient='records')
+                        
+                        with st.spinner("⚡ Analizando afinidad en tiempo real con IA..."):
+                            contexto_ia = df_f.head(25)[['id', 'puesto', 'hard_skills']].to_json(orient='records')
+                            cv_recortado = texto[:1500].replace("\n", " ")
+                            
+                            prompt_minificado = (
+                                f"CV:{cv_recortado}. Mapea contra este JSON de ofertas usando el id en id_interno. "
+                                f"Extrae SOLO los que tengan MATCH > 70% basado en hard_skills: {contexto_ia}"
+                            )
                             
                             resp = cliente.models.generate_content(
                                 model='gemini-2.5-flash', 
-                                contents=f"Evalúa este CV: {texto[:2000]}. Filtra y extrae solo las vacantes con MATCH > 70% usando este JSON. El campo id_interno mapea al campo id: {contexto_ofertas}",
+                                contents=prompt_minificado,
                                 config=types.GenerateContentConfig(
                                     response_mime_type="application/json", 
-                                    response_schema=RespuestaMatchIA
+                                    response_schema=RespuestaMatchIA,
+                                    temperature=0.1
                                 )
                             )
                             
@@ -134,6 +142,8 @@ else:
                                             
                     except Exception as e:
                         if "429" in str(e):
-                            st.warning("⚠️ Límite de consultas saturado temporalmente. Espera 60 segundos.")
+                            st.error("⚠️ El servidor de evaluación está muy solicitado en este segundo. Por favor, reintenta en 15 segundos.")
                         else:
                             st.error(f"Error técnico de la IA: {e}")
+                    finally:
+                        st.session_state.procesando_cv = False
