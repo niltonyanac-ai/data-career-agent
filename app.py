@@ -13,7 +13,7 @@ from typing import List
 
 st.set_page_config(page_title="DataCareer AI", layout="wide", page_icon="💼")
 
-# --- Esquemas ---
+# --- Esquemas Pydantic ---
 class EvaluacionIndividual(BaseModel):
     id_interno: int
     match_score: int
@@ -46,7 +46,7 @@ def obtener_data():
 
 df_raw = obtener_data()
 
-# --- 2. Interfaz ---
+# --- 2. Interfaz Gráfica ---
 st.title("💼 DataCareer AI")
 tab1, tab2 = st.tabs(["📊 Mercado", "🔍 Evaluador de CV"])
 
@@ -59,7 +59,7 @@ with tab1:
     if filtro_esp != "Todos": df_f = df_f[df_f['especialidad'] == filtro_esp]
     df_f = df_f[df_f['fecha'] >= (datetime.now() - timedelta(days=dias))]
     
-    # 4 Gráficos fijos
+    # Renderizado de los 4 Gráficos Requeridos
     col1, col2 = st.columns(2)
     with col1:
         st.altair_chart(alt.Chart(df_f['jerarquia'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('jerarquia:N', sort='-x')), use_container_width=True)
@@ -68,6 +68,7 @@ with tab1:
         st.altair_chart(alt.Chart(df_f['especialidad'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('especialidad:N', sort='-x')), use_container_width=True)
         st.altair_chart(alt.Chart(df_f.explode('soft_skills')['soft_skills'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('soft_skills:N', sort='-x')), use_container_width=True)
 
+    # Tabla limpia sin la columna 'id'
     st.dataframe(df_f.drop(columns=['id']), column_config={"Link": st.column_config.LinkColumn("Postular", display_text="Ver oferta")}, use_container_width=True)
 
 with tab2:
@@ -80,25 +81,46 @@ with tab2:
                     reader = PdfReader(archivo)
                     texto = "".join([p.extract_text() for p in reader.pages])
                 except Exception as e:
-                    st.error(f"Error leyendo PDF: {e}")
+                    st.error(f"Error al leer el archivo PDF: {e}")
             else:
                 texto = archivo.getvalue().decode("utf-8", errors="ignore")
                 
-            try:
-                # Intenta con un modelo más estándar o genérico
-                cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-                with st.spinner("Analizando matches con IA..."):
-                    resp = cliente.models.generate_content(
-                        model='gemini-1.5-flash', 
-                        contents=f"Evalúa CV: {texto[:1500]}. Filtra ofertas con Match > 70% de: {df_f.head(20).to_json()}",
-                        config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=RespuestaMatchIA)
-                    )
-                    res_data = json.loads(resp.text)
-                    for item in res_data['evaluaciones']:
-                        match = df_f[df_f['id'] == item['id_interno']]
-                        if not match.empty:
-                            with st.container(border=True):
-                                st.write(f"### Match: {item['match_score']}% - {match.iloc[0]['puesto']}")
-                                st.link_button("🔗 Ver Oferta en LinkedIn", match.iloc[0]['Link'])
-            except Exception as e:
-                st.error(f"Error técnico de IA: {e}. Verifica si el modelo está habilitado en tu región o clave.")
+            if texto.strip() == "":
+                st.warning("No se pudo extraer texto del archivo subido.")
+            else:
+                try:
+                    # Inicialización nativa con el nuevo SDK de Google GenAI
+                    cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+                    with st.spinner("Analizando matches con IA..."):
+                        # Usamos gemini-2.5-flash, el modelo estándar y nativo del nuevo SDK
+                        resp = cliente.models.generate_content(
+                            model='gemini-2.5-flash', 
+                            contents=f"Evalúa el siguiente CV: {texto[:2000]}. Filtra y extrae únicamente las vacantes que tengan un MATCH > 70% basándote estrictamente en este listado JSON: {df_f.head(25).to_json()}",
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json", 
+                                response_schema=RespuestaMatchIA
+                            )
+                        )
+                        
+                        res_data = json.loads(resp.text)
+                        
+                        if not res_data.get('evaluaciones'):
+                            st.info("No se encontraron ofertas con un índice de compatibilidad mayor al 70%.")
+                        else:
+                            # Ordenar las evaluaciones de mayor a menor porcentaje de match
+                            evaluaciones_ordenadas = sorted(res_data['evaluaciones'], key=lambda x: x['match_score'], reverse=True)
+                            
+                            for item in evaluaciones_ordenadas:
+                                match = df_f[df_f['id'] == item['id_interno']]
+                                if not match.empty:
+                                    with st.container(border=True):
+                                        st.write(f"### Match: {item['match_score']}% — {match.iloc[0]['puesto']}")
+                                        st.write(f"**Especialidad:** {match.iloc[0]['especialidad']} | **Jerarquía:** {match.iloc[0]['jerarquia']}")
+                                        st.write(f"**Coincidencias identificadas:** {item['coincidencias']}")
+                                        st.link_button("🔗 Ver Oferta en LinkedIn", match.iloc[0]['Link'])
+                                        
+                except Exception as e:
+                    if "429" in str(e):
+                        st.warning("⚠️ Se ha agotado temporalmente la cuota de la API. Por favor, espera un minuto antes de volver a presionar el botón.")
+                    else:
+                        st.error(f"Error de comunicación con la IA: {e}")
