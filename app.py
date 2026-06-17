@@ -21,7 +21,7 @@ class EvaluacionIndividual(BaseModel):
 class RespuestaMatchIA(BaseModel):
     evaluaciones: List[EvaluacionIndividual]
 
-# --- Conexión Nativa a Supabase con Caché en Tiempo Real ---
+# --- Conexión Nativa a Supabase con Caché ---
 @st.cache_data(ttl=5, show_spinner="Cargando ofertas del mercado real...")
 def obtener_data_real():
     try:
@@ -106,10 +106,7 @@ else:
                         cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
                         
                         with st.spinner("⚡ Analizando afinidad en tiempo real con IA..."):
-                            # Ordenamos por fecha descendente para garantizar evaluar lo más nuevo del mercado
                             df_ordenado = df_f.sort_values(by='fecha_creacion', ascending=False)
-                            
-                            # Agregamos la columna 'jerarquia' indispensable para el análisis dimensional profundo
                             contexto_ia = df_ordenado.head(25)[['id', 'puesto', 'jerarquia', 'hard_skills']].to_json(orient='records')
                             cv_recortado = texto[:1500].replace("\n", " ")
                             
@@ -130,7 +127,7 @@ else:
                                 config=types.GenerateContentConfig(
                                     response_mime_type="application/json", 
                                     response_schema=RespuestaMatchIA,
-                                    temperature=0.0  # Consistencia y lógica estricta sin margen a la creatividad
+                                    temperature=0.0
                                 )
                             )
                             
