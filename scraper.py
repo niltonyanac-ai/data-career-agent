@@ -70,7 +70,7 @@ def ejecutar_scraper():
                         elif any(x in puesto_lower for x in ["jefe", "jefatura", "manager", "gerente", "coordinador"]):
                             jerarquia = "Líder / Jefatura"
 
-                        # Extracción Granular de Hard Skills para evitar homogeneidad
+                        # Extracción Granular de Hard Skills
                         hard_skills = []
                         if "excel" in puesto_lower or "analista" in puesto_lower: hard_skills.append("Excel")
                         if any(x in puesto_lower for x in ["sql", "data", "engineer", "scientist"]): hard_skills.append("SQL")
@@ -86,7 +86,7 @@ def ejecutar_scraper():
                         oferta = {
                             "puesto": puesto,
                             "empresa": empresa,
-                            "especialidad": especialidad,
+                            "especialidad": specialty := especialidad,
                             "jerarquia": jerarquia,
                             "hard_skills": hard_skills,
                             "soft_skills": ["Análisis", "Comunicación"],
