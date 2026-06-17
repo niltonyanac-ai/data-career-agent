@@ -29,7 +29,6 @@ def ejecutar_scraper():
     for r in roles:
         for start in [0, 25, 50, 75]:
             try:
-                # f_TPR=r7776000 extrae el rango de los últimos 90 días solicitados
                 url = f"https://www.linkedin.com/jobs/api/seeMoreJobPostings/search?keywords={r}&location=Peru&f_TPR=r7776000&start={start}"
                 respuesta = requests.get(url, headers=headers, timeout=15)
                 
@@ -50,26 +49,39 @@ def ejecutar_scraper():
                         link = link_elem['href'].split('?')[0]
                         
                         puesto_lower = puesto.lower()
+                        
+                        # Mapeo de Especialidades
                         especialidad = "Data Analytics"
                         if "bi" in puesto_lower or "intelligence" in puesto_lower or "inteligencia" in puesto_lower:
                             especialidad = "Business Intelligence"
-                        elif "scientist" in puesto_lower or "científico" in puesto_lower or "ciencia" in puesto_lower:
+                        elif "scientist" in puesto_lower or "científico" in puesto_lower or "ciencia" in puesto_lower or "learning" in puesto_lower:
                             especialidad = "Data Science"
+                        elif "engineer" in puesto_lower or "ingeniero de datos" in puesto_lower:
+                            especialidad = "Data Engineering"
                         elif "comercial" in puesto_lower:
                             especialidad = "Inteligencia Comercial"
                             
+                        # Clasificación de Jerarquía
                         jerarquia = "Analista"
-                        if any(x in puesto_lower for x in ["senior", "sr", "lead", "principal"]):
+                        if any(x in puesto_lower for x in ["senior", "sr", "lead", "principal", "advanced"]):
                             jerarquia = "Senior"
-                        elif any(x in puesto_lower for x in ["junior", "jr", "practicante", "trainee"]):
+                        elif any(x in puesto_lower for x in ["junior", "jr", "practicante", "trainee", "asistente"]):
                             jerarquia = "Junior"
-                        elif any(x in puesto_lower for x in ["jefe", "jefatura", "manager", "gerente"]):
+                        elif any(x in puesto_lower for x in ["jefe", "jefatura", "manager", "gerente", "coordinador"]):
                             jerarquia = "Líder / Jefatura"
 
-                        hard_skills = ["SQL", "Excel"]
-                        if "python" in puesto_lower or "r" in puesto_lower: hard_skills.append("Python")
+                        # Extracción Granular de Hard Skills para evitar homogeneidad
+                        hard_skills = []
+                        if "excel" in puesto_lower or "analista" in puesto_lower: hard_skills.append("Excel")
+                        if any(x in puesto_lower for x in ["sql", "data", "engineer", "scientist"]): hard_skills.append("SQL")
+                        if "python" in puesto_lower or "scientist" in puesto_lower or "learning" in puesto_lower: hard_skills.append("Python")
+                        if "r" in puesto_lower and "engineer" not in puesto_lower: hard_skills.append("R")
                         if "power bi" in puesto_lower or "bi" in puesto_lower: hard_skills.append("Power BI")
                         if "tableau" in puesto_lower: hard_skills.append("Tableau")
+                        if "spark" in puesto_lower or "databricks" in puesto_lower: hard_skills.append("Spark")
+                        if any(x in puesto_lower for x in ["aws", "azure", "gcp", "cloud"]): hard_skills.append("Cloud Computing")
+                        
+                        if not hard_skills: hard_skills = ["SQL", "Excel"]
                         
                         oferta = {
                             "puesto": puesto,
