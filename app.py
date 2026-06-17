@@ -74,7 +74,7 @@ else:
                 st.altair_chart(alt.Chart(df_f.explode('soft_skills')['soft_skills'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('soft_skills:N', sort='-x')), use_container_width=True)
 
             st.dataframe(
-                df_f.drop(columns=['id']), 
+                df_f.drop(columns=['id']).sort_values(by='fecha_creacion', ascending=False), 
                 column_config={"link": st.column_config.LinkColumn("Postular", display_text="Ver oferta")}, 
                 use_container_width=True
             )
@@ -106,21 +106,31 @@ else:
                         cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
                         
                         with st.spinner("⚡ Analizando afinidad en tiempo real con IA..."):
-                            contexto_ia = df_f.head(25)[['id', 'puesto', 'hard_skills']].to_json(orient='records')
+                            # Ordenamos por fecha descendente para garantizar evaluar lo más nuevo del mercado
+                            df_ordenado = df_f.sort_values(by='fecha_creacion', ascending=False)
+                            
+                            # Agregamos la columna 'jerarquia' indispensable para el análisis dimensional profundo
+                            contexto_ia = df_ordenado.head(25)[['id', 'puesto', 'jerarquia', 'hard_skills']].to_json(orient='records')
                             cv_recortado = texto[:1500].replace("\n", " ")
                             
-                            prompt_minificado = (
-                                f"CV:{cv_recortado}. Mapea contra este JSON de ofertas usando el id en id_interno. "
-                                f"Extrae SOLO los que tengan MATCH > 70% basado en hard_skills: {contexto_ia}"
+                            prompt_blindado = (
+                                f"Actúas como un reclutador corporativo técnico e implacable. "
+                                f"Evalúa minuciosamente el siguiente CV recortado: {cv_recortado}. "
+                                f"Mapea su afinidad contra este JSON de ofertas usando el id en id_interno: {contexto_ia}.\n\n"
+                                f"Reglas matemáticas obligatorias para calcular el match_score (0 a 100):\n"
+                                f"1. Si una oferta indica jerarquía 'Senior' o 'Líder / Jefatura' y el CV no refleja explícitamente años de experiencia sólida a cargo, el match máximo permitido es 55%.\n"
+                                f"2. Saber SQL y Excel NO valida a un candidato para puestos etiquetados como 'Data Scientist' o 'Machine Learning Engineer'. Si no hay fundamentos estadísticos o de modelamiento evidentes en el CV para estos roles, el match máximo permitido es 45%.\n"
+                                f"3. Reserva puntajes mayores al 85% únicamente si el rol, el seniority requerido y las tecnologías específicas calzan de manera exacta.\n"
+                                f"Extrae en la estructura JSON solicitada SOLO aquellos registros cuyo cálculo matemático estricto supere el 70%."
                             )
                             
                             resp = cliente.models.generate_content(
                                 model='gemini-2.5-flash', 
-                                contents=prompt_minificado,
+                                contents=prompt_blindado,
                                 config=types.GenerateContentConfig(
                                     response_mime_type="application/json", 
                                     response_schema=RespuestaMatchIA,
-                                    temperature=0.1
+                                    temperature=0.0  # Consistencia y lógica estricta sin margen a la creatividad
                                 )
                             )
                             
@@ -128,7 +138,7 @@ else:
                             evaluaciones = res_data.get('evaluaciones', [])
                             
                             if not evaluaciones:
-                                st.info("Ninguna oferta del mercado actual supera el 70% de compatibilidad con tu perfil.")
+                                st.info("Ninguna oferta disponible del mercado actual supera el 70% de compatibilidad estricta con tu perfil.")
                             else:
                                 evaluaciones_ordenadas = sorted(evaluaciones, key=lambda x: x['match_score'], reverse=True)
                                 for item in evaluaciones_ordenadas:
@@ -137,12 +147,12 @@ else:
                                         with st.container(border=True):
                                             st.write(f"### Match: {item['match_score']}% — {match.iloc[0]['puesto']}")
                                             st.write(f"**Empresa:** {match.iloc[0]['empresa']} | **Jerarquía:** {match.iloc[0]['jerarquia']}")
-                                            st.write(f"**Coincidencias encontradas:** {item['coincidencias']}")
+                                            st.write(f"**Criterio de coincidencia:** {item['coincidencias']}")
                                             st.link_button("🔗 Ver Oferta en LinkedIn", match.iloc[0]['link'])
                                             
                     except Exception as e:
                         if "429" in str(e):
-                            st.error("⚠️ El servidor de evaluación está muy solicitado en este segundo. Por favor, reintenta en 15 segundos.")
+                            st.error("⚠️ El servidor está recibiendo un alto volumen de solicitudes simultáneas. Por favor, reintenta en 15 segundos.")
                         else:
                             st.error(f"Error técnico de la IA: {e}")
                     finally:
