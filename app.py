@@ -1,3 +1,20 @@
+import subprocess
+import sys
+import time
+
+# Lista de librerías esenciales para la IA, Base de Datos y PDFs
+LIBRERIAS_CORE = ["google-genai", "supabase", "pypdf"]
+
+for libreria in LIBRERIAS_CORE:
+    nombre_modulo = libreria.replace("-", "_")
+    try:
+        __import__(nombre_modulo)
+    except ImportError:
+        # Forzar la instalación síncrona en el contenedor de Streamlit
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", libreria])
+        time.sleep(2)  # Pausa técnica de seguridad para que el sistema asiente el módulo
+
+# --- AHORA SÍ, UNA VEZ ASEGURADOS LOS MÓDULOS, CONTINÚAN LOS IMPORTS NORMALES ---
 import streamlit as st
 import pandas as pd
 import json
@@ -32,171 +49,133 @@ def obtener_data_real():
         
         respuesta = supabase.table("vacantes").select("*").execute()
         df = pd.DataFrame(respuesta.data)
-        
-        if df.empty:
-            return pd.DataFrame(columns=['id', 'puesto', 'empresa', 'especialidad', 'jerarquia', 'hard_skills', 'soft_skills', 'link', 'fecha_creacion'])
-        
-        df['fecha_creacion'] = pd.to_datetime(df['fecha_creacion'])
+        if not df.empty and 'fecha_creacion' in df.columns:
+            df['fecha_creacion'] = pd.to_datetime(df['fecha_creacion'])
         return df
     except Exception as e:
-        st.error(f"Error de enlace con el repositorio de datos: {e}")
+        st.error(f"Error de conexión con el backend de datos: {e}")
         return pd.DataFrame()
 
-df_raw = obtener_data_real()
+df_vacantes = obtener_data_real()
 
-# --- Bloque Header Corporativo (Diseño UX/CX Recomendado) ---
-st.write("# 💼 DataCareer AI")
-st.write("### *Optimización de Perfiles Profesionales en Data, Analytics & Inteligencia Artificial*")
-st.markdown(
-    """
-    Bienvenido a la plataforma avanzada de inteligencia de mercado de talento. Este servicio audita en tiempo real 
-    las demandas de contratación en el sector tecnológico y contrasta la arquitectura de tu currículum vitae 
-    frente a necesidades de negocio validadas mediante modelos de procesamiento de lenguaje natural (LLM).
-    """
-)
-st.write("---")
+# --- Interfaz de Usuario y Cuadro de Mando ---
+st.title("💼 DataCareer AI")
+st.markdown("### Sistema Inteligente de Monitoreo de Mercado y Empleabilidad")
 
-if df_raw.empty:
-    st.warning("⚠️ Monitoreo temporal fuera de línea. No se registran ofertas analíticas en el almacén central.")
+if df_vacantes.empty:
+    st.info("Sincronizando el flujo de datos inicial... Ejecuta el Scraper en GitHub Actions para poblar el ecosistema.")
 else:
-    # --- Barra Lateral Estructurada de Filtros Coherentes ---
-    st.sidebar.header("⚙️ Consola de Filtros")
-    filtro_esp = st.sidebar.selectbox("Especialidad Analítica", ["Todos"] + sorted(list(df_raw['especialidad'].unique())))
-    filtro_jer = st.sidebar.selectbox("Nivel / Jerarquía del Puesto", sorted(list(df_raw['jerarquia'].unique())))
-    dias = st.sidebar.slider("Antigüedad de las Ofertas (Días)", 1, 90, 90)
+    # KPIs en la Portada
+    total_ofertas = len(df_vacantes)
+    ultima_act = df_vacantes['fecha_creacion'].max().strftime('%d/%m/%Y %H:%M')
     
-    # Procesamiento dinámico del DataFrame bajo demanda
-    df_f = df_raw.copy()
-    if filtro_esp != "Todos": 
-        df_f = df_f[df_f['especialidad'] == filtro_esp]
-    
-    df_f = df_f[df_f['jerarquia'] == filtro_jer]
+    col_kpi1, col_kpi2 = st.columns(2)
+    with col_kpi1:
+        st.metric("Ofertas Vigentes Monitoreadas", total_ofertas)
+    with col_kpi2:
+        st.metric("Última Actualización del Pipeline", ultima_act)
         
-    limite_tiempo = datetime.now(df_f['fecha_creacion'].dt.tz) - timedelta(days=dias)
-    df_f = df_f[df_f['fecha_creacion'] >= limite_tiempo]
+    # Filtros Avanzados en Barra Lateral
+    st.sidebar.header("Filtros Analíticos")
+    especialidades = df_vacantes['especialidad'].unique().tolist()
+    esp_sel = st.sidebar.selectbox("Especialidad Objetivo", ["Todas"] + especialidades)
     
-    # Renderizado dinámico de KPIs del mercado en tiempo real
-    total_disponible = len(df_f)
-    ultima_act = df_raw['fecha_creacion'].max().strftime('%d/%m/%Y %H:%M')
+    jerarquias = df_vacantes['jerarquia'].unique().tolist()
+    jer_sel = st.sidebar.multiselect("Nivel de Jerarquía", jerarquias, default=jerarquias)
     
-    m1, m2 = st.columns(2)
-    with m1:
-        st.metric(label="Ofertas Analíticas Disponibles", value=total_disponible)
-    with m2:
-        st.metric(label="Última Sincronización del Mercado", value=ultima_act)
+    # Filtrado Dinámico
+    df_filtrado = df_vacantes[df_vacantes['jerarquia'].isin(jer_sel)]
+    if esp_sel != "Todas":
+        df_filtrado = df_filtrado[df_filtrado['especialidad'] == esp_sel]
         
-    tab1, tab2 = st.tabs(["📊 Dashboard de Tendencias de Mercado", "🔍 Evaluador de CV por Jerarquía"])
-
-    # ==========================================
-    # PESTAÑA 1: VISUALIZACIÓN DE ANALÍTICA AVANZADA
-    # ==========================================
-    with tab1:
-        if df_f.empty:
-            st.info("No se registran ofertas que cumplan con la combinación de filtros seleccionada en este momento.")
+    # Pestañas de Trabajo
+    tab_mercado, tab_evaluador = st.tabs(["📊 Mercado", "🔍 Evaluador de CV"])
+    
+    with tab_mercado:
+        st.subheader("Análisis de Demanda Real")
+        if not df_filtrado.empty:
+            # Gráfico de Jerarquías
+            chart_jer = alt.Chart(df_filtrado).mark_bar().encode(
+                x=alt.X('count():Q', title='Cantidad de Vacantes'),
+                y=alt.Y('jerarquia:N', sort='-x', title='Jerarquía'),
+                color=alt.value('#0068c9')
+            ).properties(height=200)
+            st.altair_chart(chart_jer, use_container_width=True)
+            
+            # Tabla de ofertas
+            st.write("### Ofertas Detectadas", df_filtrado[['fecha_creacion', 'puesto', 'empresa', 'especialidad', 'jerarquia']])
         else:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("#### Volumen por Especialidad Analítica")
-                st.altair_chart(alt.Chart(df_f['especialidad'].value_counts().reset_index()).mark_bar(color='#1f77b4').encode(x='count:Q', y=alt.Y('especialidad:N', sort='-x')), use_container_width=True)
-                
-                st.write("#### Requerimientos Tecnológicos (Hard Skills)")
-                st.altair_chart(alt.Chart(df_f.explode('hard_skills')['hard_skills'].value_counts().reset_index()).mark_bar(color='#aec7e8').encode(x='count:Q', y=alt.Y('hard_skills:N', sort='-x')), use_container_width=True)
-            with col2:
-                st.write("#### Distribución de Seniority Detectado")
-                st.altair_chart(alt.Chart(df_f['jerarquia'].value_counts().reset_index()).mark_bar(color='#ff7f0e').encode(x='count:Q', y=alt.Y('jerarquia:N', sort='-x')), use_container_width=True)
-                
-                st.write("#### Competencias Blandas Demandadas (Soft Skills)")
-                st.altair_chart(alt.Chart(df_f.explode('soft_skills')['soft_skills'].value_counts().reset_index()).mark_bar(color='#ffbb78').encode(x='count:Q', y=alt.Y('soft_skills:N', sort='-x')), use_container_width=True)
-
-            st.write("#### Catálogo Consolidado de Ofertas de Trabajo")
-            st.dataframe(
-                df_f.drop(columns=['id']).sort_values(by='fecha_creacion', ascending=False), 
-                column_config={"link": st.column_config.LinkColumn("Postular", display_text="Ver Oferta")}, 
-                use_container_width=True
-            )
-
-    # ==========================================
-    # PESTAÑA 2: EVALUADOR MATRICIAL DE CV
-    # ==========================================
-    with tab2:
-        st.write(f"#### Evaluando Perfiles exclusivamente para el Nivel: **{filtro_jer}**")
-        st.info(f"Nota de UX: Este módulo contrasta tu CV únicamente contra las {len(df_f.head(30))} vacantes filtradas en el panel izquierdo.")
+            st.warning("No hay registros para los filtros seleccionados.")
+            
+    with tab_evaluador:
+        st.subheader("Evaluador Inteligente de Perfiles (Gemini 2.5)")
+        archivo_cv = st.file_uploader("Carga tu Currículum Vitae (Formato PDF)", type=["pdf"])
         
-        archivo = st.file_uploader("Carga tu Currículum Vitae en formato digital (PDF o TXT)", type=['pdf', 'txt'])
-        if archivo:
-            if "procesando_cv" not in st.session_state:
-                st.session_state.procesando_cv = False
-
-            if st.button("Ejecutar Auditoría de Compatibilidad", disabled=st.session_state.procesando_cv):
-                texto = ""
-                if archivo.type == "application/pdf":
+        if archivo_cv and not df_filtrado.empty:
+            if st.button("Iniciar Evaluación de Compatibilidad"):
+                with st.spinner("Analizando semántica del CV frente a las vacantes de Supabase..."):
                     try:
-                        reader = PdfReader(archivo)
-                        texto = "".join([p.extract_text() for p in reader.pages])
-                    except Exception as e:
-                        st.error(f"Error en la lectura estructural del PDF: {e}")
-                else:
-                    texto = archivo.getvalue().decode("utf-8", errors="ignore")
-                    
-                if texto.strip() == "":
-                    st.warning("El documento no posee texto legible. Verifique que no sea un archivo escaneado como imagen.")
-                elif df_f.empty:
-                    st.warning("No hay un grupo de control de vacantes disponible para la jerarquía seleccionada.")
-                else:
-                    try:
-                        st.session_state.procesando_cv = True
-                        cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+                        # Leer PDF
+                        lector = PdfReader(archivo_cv)
+                        texto_cv = ""
+                        for pagina in lector.pages:
+                            texto_cv += pagina.extract_text()
+                            
+                        # Preparar cliente Gemini
+                        client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
                         
-                        with st.spinner("⚡ Calculando afinidad matricial en el clúster LLM..."):
-                            # Ordenamiento estricto por ID para garantizar la invariabilidad del contexto
-                            df_ordenado = df_f.sort_values(by='id', ascending=True)
-                            contexto_ia = df_ordenado.head(30)[['id', 'puesto', 'jerarquia', 'hard_skills']].to_json(orient='records')
-                            cv_recortado = texto[:1800].replace("\n", " ")
+                        # Construcción del Prompt Estricto Determinista
+                        contexto_vacantes = []
+                        for _, row in df_filtrado.iterrows():
+                            contexto_vacantes.append({
+                                "id": row['id'],
+                                "puesto": row['puesto'],
+                                "empresa": row['empresa'],
+                                "hard_skills": row['hard_skills'],
+                                "soft_skills": row['soft_skills']
+                            })
                             
-                            prompt_algoritmico = (
-                                f"Eres un motor matemático frío, determinista y estricto de emparejamiento técnico corporativo.\n"
-                                f"Tu tarea es evaluar la afinidad del CV proporcionado contra un catálogo de ofertas del nivel jerárquico: {filtro_jer}.\n\n"
-                                f"Entrada de CV Profesional: {cv_recortado}\n"
-                                f"Catálogo Base de Ofertas (JSON): {contexto_ia}\n\n"
-                                f"REGLAS CRÍTICAS DE CALIBRACIÓN MATEMÁTICA (Match Score del 0 al 100):\n"
-                                f"1. Evalúa de forma aislada cada elemento del catálogo respetando su orden por 'id'.\n"
-                                f"2. Penalizaciones Obligatorias y Techos de Puntuación:\n"
-                                f"   - Si la oferta pertenece a la jerarquía 'Senior' o 'Líder / Jefatura' y el CV no explicita métricas cuantitativas de impacto o más de 5 años dirigiendo áreas analíticas, el match score tiene un techo máximo inamovible de 45%.\n"
-                                f"   - Si el puesto es para 'Data Science' y el CV carece de mención explícita a modelos predictivos, álgebra, estadística avanzada o desarrollo estructurado en Python/R, el match score máximo es de 40%.\n"
-                                f"3. Restringe las calificaciones superiores al 85% únicamente a perfiles que demuestren simetría total en herramientas especializadas, nivel del puesto y dominio sectorial.\n"
-                                f"4. Retorna en la estructura JSON configurada SOLAMENTE aquellos registros cuyo cómputo final sea estrictamente igual o superior al 70%. Sé implacable y consistente."
-                            )
+                        prompt = f"""
+                        Actúa como un validador de ATS corporativo estricto y determinista de alta precisión.
+                        Analiza el siguiente Currículum Vitae frente a la lista de vacantes reales provistas.
+                        
+                        REGLAS CRÍTICAS:
+                        1. Calcula el 'match_score' de 0 a 100 basándote estrictamente en las Hard Skills y Soft Skills explícitamente presentes tanto en el CV como en la vacante.
+                        2. Si el perfil no se alinea en absoluto (por ejemplo, áreas de negocio incompatibles o falta total de tecnologías core), el score DEBE ser 0. NO inventes emparejamientos artificiales.
+                        3. La respuesta debe estructurarse estrictamente bajo el esquema JSON solicitado, sin textos introductorios ni marcas markdown de bloque ```json.
+                        
+                        CV del Candidato:
+                        {texto_cv}
+                        
+                        Lista de Vacantes Disponibles:
+                        {json.dumps(contexto_vacantes)}
+                        """
+                        
+                        response = client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=prompt,
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json",
+                                response_schema=RespuestaMatchIA,
+                                temperature=0.0  # Máximo determinismo
+                            ),
+                        )
+                        
+                        # Parsear e integrar resultados
+                        resultados = json.loads(response.text)
+                        df_evaluaciones = pd.DataFrame(resultados["evaluaciones"])
+                        
+                        if not df_evaluaciones.empty:
+                            df_final = df_filtrado.merge(df_evaluaciones, left_on='id', right_on='id_interno')
+                            df_final = df_final.sort_values(by='match_score', ascending=False)
                             
-                            resp = cliente.models.generate_content(
-                                model='gemini-2.5-flash', 
-                                contents=prompt_algoritmico,
-                                config=types.GenerateContentConfig(
-                                    response_mime_type="application/json", 
-                                    response_schema=RespuestaMatchIA,
-                                    temperature=0.0  # Apaga la creatividad para mitigar la variación estocástica
-                                )
-                            )
-                            
-                            res_data = json.loads(resp.text)
-                            evaluaciones = res_data.get('evaluaciones', [])
-                            
-                            if not evaluaciones:
-                                st.info(f"Análisis finalizado: Ninguna de las ofertas para el nivel '{filtro_jer}' cumple con el umbral mínimo del 70% de compatibilidad técnica con el CV provisto.")
-                            else:
-                                evaluaciones_ordenadas = sorted(evaluaciones, key=lambda x: x['match_score'], reverse=True)
-                                for item in evaluaciones_ordenadas:
-                                    match = df_f[df_f['id'] == item['id_interno']]
-                                    if not match.empty:
-                                        with st.container(border=True):
-                                            st.write(f"### Match Técnico: {item['match_score']}% — {match.iloc[0]['puesto']}")
-                                            st.write(f"**Empresa:** {match.iloc[0]['empresa']} | **Especialidad:** {match.iloc[0]['especialidad']}")
-                                            st.write(f"**Justificación de Coincidencia:** {item['coincidencias']}")
-                                            st.link_button("🔗 Aplicar a la Vacante Real", match.iloc[0]['link'])
-                                            
-                    except Exception as e:
-                        if "429" in str(e):
-                            st.error("⚠️ El clúster de cómputo gratuito está experimentando una alta demanda simultánea. Reintente en 10 segundos.")
+                            st.success("¡Análisis completado con éxito!")
+                            for _, rank in df_final.iterrows():
+                                color_score = "🟢" if rank['match_score'] >= 70 else "🟡" if rank['match_score'] >= 40 else "🔴"
+                                with st.expander(f"{color_score} {rank['match_score']}% Match - {rank['puesto']} en {rank['empresa']}"):
+                                    st.write(f"**Especialidad:** {rank['especialidad']} | **Jerarquía:** {rank['jerarquia']}")
+                                    st.write(f"**Coincidencias Clave Detectadas:** {rank['coincidencias']}")
                         else:
-                            st.error(f"Error en la capa de procesamiento del lenguaje: {e}")
-                    finally:
-                        st.session_state.procesando_cv = False
+                            st.warning("El modelo ATS determinista no encontró coincidencias estructurales mínimas con las vacantes activas.")
+                    except Exception as ex:
+                        st.error(f"Error durante el proceso de evaluación por Inteligencia Artificial: {ex}")
