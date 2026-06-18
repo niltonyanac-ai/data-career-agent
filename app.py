@@ -17,14 +17,8 @@ st.set_page_config(
     page_icon="💼"
 )
 
-# Estilos personalizados para mejorar la UX (Tarjetas y selectores)
-st.markdown("""
-    <style>
-    .main-title { font-size: 2.6rem; font-weight: 800; color: #1E293B; margin-bottom: 0.5rem; }
-    .subtitle { font-size: 1.2rem; color: #64748B; margin-bottom: 2rem; }
-    .kpi-container { background-color: #F8FAFC; padding: 1.5rem; border-radius: 0.75rem; border: 1px solid #E2E8F0; }
-    </style>
-""", unsafe_allowed_html=True)
+# Estilos personalizados para mejorar la UX (Sin indentación interna heredada)
+st.markdown("<style>.main-title { font-size: 2.6rem; font-weight: 800; color: #1E293B; margin-bottom: 0.5rem; } .subtitle { font-size: 1.2rem; color: #64748B; margin-bottom: 2rem; } .kpi-container { background-color: #F8FAFC; padding: 1.5rem; border-radius: 0.75rem; border: 1px solid #E2E8F0; }</style>", unsafe_allowed_html=True)
 
 # --- Modelado de Datos para Gemini 2.5 Flash ---
 class EvaluacionIndividual(BaseModel):
