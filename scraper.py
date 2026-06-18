@@ -1,19 +1,21 @@
 import os
+import time
+import random
 import requests
 from bs4 import BeautifulSoup
+from datetime import datetime, timedelta, timezone
 from supabase import create_client, Client
 
-# Configuración 100% segura basada en las variables que ya tienes en GitHub
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Error crítico: Credenciales de acceso seguras de Supabase no detectadas en el entorno.")
+    raise ValueError("Variables de entorno SUPABASE_URL o SUPABASE_KEY ausentes.")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def ejecutar_scraper():
-    print("Iniciando pipeline de extracción automatizada con filtros de pureza...")
+    print("Iniciando Pipeline Avanzado Antiban de Extracción...")
     nuevas_vacantes = []
     
     roles = [
@@ -22,27 +24,37 @@ def ejecutar_scraper():
         "ingeniero de datos", "data engineer", "cientifico de datos"
     ]
     
-    # Lista negra estricta de exclusión sectorial
     LISTA_NEGRA = [
         "quimico", "química", "laboratorio", "clinico", "clínico", "creditos", 
         "créditos", "contable", "contabilidad", "legal", "procesos", "calidad",
         "rrhh", "recursos humanos", "compras", "inventarios", "microbiologia",
-        "farmaceutico", "biologo", "mantenimiento", "soporte tecnico", "abogado",
-        "medico", "médico", "enfermero", "psicologo"
+        "farmaceutico", "biologo", "mantenimiento", "soporte tecnico"
     ]
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "es-ES,es;q=0.9"
-    }
+
+    # Rotación dinámica de User-Agents para mitigar el bloqueo por IP de LinkedIn
+    USER_AGENTS = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ]
 
     for r in roles:
-        for start in [0, 25, 50, 75]:
+        for start in [0, 25, 50]: # Reducido ligeramente para evitar saturar el endpoint público
             try:
-                url = f"https://www.linkedin.com/jobs/api/seeMoreJobPostings/search?keywords={r}&location=Peru&f_TPR=r7776000&start={start}"
+                headers = {
+                    "User-Agent": random.choice(USER_AGENTS),
+                    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8"
+                }
+                # f_TPR=r2592000 representa el filtro nativo de LinkedIn para el Último Mes (30 días)
+                url = f"https://www.linkedin.com/jobs/api/seeMoreJobPostings/search?keywords={r}&location=Peru&f_TPR=r2592000&start={start}"
+                
                 respuesta = requests.get(url, headers=headers, timeout=15)
                 
+                # Pausa técnica antiban aleatoria
+                time.sleep(random.uniform(2.5, 5.0))
+                
                 if respuesta.status_code != 200:
+                    print(f"Alerta: Tráfico bloqueado o fin de respuestas para {r} (Status: {respuesta.status_code})")
                     continue
                     
                 soup = BeautifulSoup(respuesta.text, 'html.parser')
@@ -57,39 +69,30 @@ def ejecutar_scraper():
                         puesto = titulo_elem.text.strip()
                         empresa = empresa_elem.text.strip()
                         link = link_elem['href'].split('?')[0]
-                        
                         puesto_lower = puesto.lower()
                         
-                        # Filtro 1: Lista negra sectorial
                         if any(negra in puesto_lower for negra in LISTA_NEGRA):
                             continue
                             
-                        # Filtro 2: Validación de términos core de tecnología y datos
-                        TERMINOS_VALIDOS = ["data", "analyst", "analista", "bi", "intelligence", "inteligencia", "scientist", "cientifico", "analytics", "engineer", "ingeniero", "modelamiento", "machine", "ai", "artificial"]
+                        TERMINOS_VALIDOS = ["data", "analyst", "analista", "bi", "intelligence", "inteligencia", "scientist", "cientifico", "analytics", "engineer", "ingeniero", "ai", "artificial"]
                         if not any(valido in puesto_lower for valido in TERMINOS_VALIDOS):
                             continue
 
-                        # Clasificación y asignación precisa de especialidad
+                        # Taxonomía analítica precisa
                         especialidad = None
                         if "bi" in puesto_lower or "intelligence" in puesto_lower or "inteligencia" in puesto_lower:
-                            if "comercial" in puesto_lower:
-                                especialidad = "Inteligencia Comercial"
-                            else:
-                                especialidad = "Business Intelligence"
-                        elif "scientist" in puesto_lower or "científico" in puesto_lower or "ciencia" in puesto_lower or "learning" in puesto_lower or "ai" in puesto_lower:
+                            especialidad = "Inteligencia Comercial" if "comercial" in puesto_lower else "Business Intelligence"
+                        elif any(x in puesto_lower for x in ["scientist", "científico", "ciencia", "learning", "ai"]):
                             especialidad = "Data Science"
                         elif "engineer" in puesto_lower or "ingeniero de datos" in puesto_lower:
                             especialidad = "Data Engineering"
-                        elif "analista de datos" in puesto_lower or "data analyst" in puesto_lower or "analytics" in puesto_lower:
+                        elif any(x in puesto_lower for x in ["analista de datos", "data analyst", "analytics"]):
                             especialidad = "Data Analytics"
-                        elif "comercial" in puesto_lower:
-                            especialidad = "Inteligencia Comercial"
                         
-                        # Purgar si no encaja en las taxonomías analíticas deseadas
-                        if not especialidad:
+                        if not list(especialidad):
                             continue
                             
-                        # Clasificación de Jerarquía / Seniority
+                        # Jerarquía de posiciones
                         jerarquia = "Analista"
                         if any(x in puesto_lower for x in ["senior", "sr", "lead", "principal", "advanced"]):
                             jerarquia = "Senior"
@@ -98,61 +101,61 @@ def ejecutar_scraper():
                         elif any(x in puesto_lower for x in ["jefe", "jefatura", "manager", "gerente", "coordinador"]):
                             jerarquia = "Líder / Jefatura"
 
-                        # Extracción Contextual de Hard Skills
+                        # Extracción Sintáctica Inteligente de Hard/Soft Skills
                         hard_skills = []
                         if "excel" in puesto_lower or "analista" in puesto_lower: hard_skills.append("Excel")
-                        if any(x in puesto_lower for x in ["sql", "data", "engineer", "scientist"]): hard_skills.append("SQL")
-                        if "python" in puesto_lower or "scientist" in puesto_lower or "learning" in puesto_lower: hard_skills.append("Python")
-                        if "r" in puesto_lower and "engineer" not in puesto_lower: hard_skills.append("R")
+                        if any(x in puesto_lower for x in ["sql", "data"]): hard_skills.append("SQL")
+                        if "python" in puesto_lower or "scientist" in puesto_lower: hard_skills.append("Python")
                         if "power bi" in puesto_lower or "bi" in puesto_lower: hard_skills.append("Power BI")
                         if "tableau" in puesto_lower: hard_skills.append("Tableau")
-                        if "spark" in puesto_lower or "databricks" in puesto_lower: hard_skills.append("Spark")
-                        if any(x in puesto_lower for x in ["aws", "azure", "gcp", "cloud"]): hard_skills.append("Cloud Computing")
-                        
+                        if "aws" in puesto_lower or "cloud" in puesto_lower: hard_skills.append("Cloud Computing")
                         if not hard_skills: hard_skills = ["SQL", "Excel"]
                         
-                        # MEJORA UX: Mapeo dinámico y diverso de Soft Skills según el perfil
                         soft_skills = ["Análisis de Datos", "Pensamiento Crítico"]
                         if jerarquia in ["Senior", "Líder / Jefatura"]:
-                            soft_skills = ["Liderazgo", "Gestión de Stakeholders", "Visión de Negocio"]
-                        elif especialidad == "Inteligencia Comercial":
-                            soft_skills = ["Comunicación Asertiva", "Orientación a Resultados", "Storytelling"]
+                            soft_skills = ["Liderazgo", "Gestión de Stakeholders"]
                         elif especialidad == "Data Science":
                             soft_skills = ["Resolución de Problemas Complejos", "Curiosidad Científica"]
-                        
+
                         oferta = {
                             "puesto": puesto,
                             "empresa": empresa,
                             "especialidad": especialidad,
                             "jerarquia": jerarquia,
-                            "hard_skills": hard_skills,
+                            "hard_skills": hard_skills,  # Enviado como lista nativa compatible con Postgres text[]
                             "soft_skills": soft_skills,
                             "link": link
                         }
                         
                         if not any(v['link'] == link for v in nuevas_vacantes):
                             nuevas_vacantes.append(oferta)
-                            
-            except Exception:
+            except Exception as e:
+                print(f"Error procesando token: {e}")
                 continue
 
-    if len(nuevas_vacantes) == 0:
-        print("La extracción finalizó con 0 registros válidos. Operación abortada para proteger la persistencia.")
+    if not nuevas_vacantes:
+        print("Cero registros extraídos en este ciclo. Abortando persistencia para evitar alteración del histórico.")
         return
 
     try:
-        print(f"Limpieza exitosa. Procesadas {len(nuevas_vacantes)} ofertas puras de Data/IA.")
-        print("Efectuando truncamiento limpio de la tabla...")
-        supabase.table("vacantes").delete().neq("id", 0).execute()
+        print(f"Procesadas con éxito {len(nuevas_vacantes)} ofertas puras.")
         
-        print("Ejecutando inserción por lotes optimizados...")
-        for i in range(0, len(nuevas_vacantes), 20):
-            lote = nuevas_vacantes[i:i+20]
-            supabase.table("vacantes").insert(lote).execute()
+        # SOLUCIÓN CRÍTICA HISTÓRICA (UPSERT): Insertar registros nuevos o actualizar existentes sin tumbar la tabla
+        print("Sincronizando mediante Upsert incremental...")
+        for o in nuevas_vacantes:
+            supabase.table("vacantes").upsert(
+                o, 
+                on_conflict="link"
+            ).execute()
             
-        print("Sincronización con repositorio central completada con éxito.")
+        # Mantenimiento estricto de la ventana de 30 días requerida
+        fecha_limite = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        print(f"Purgando registros obsoletos anteriores a: {fecha_limite}")
+        supabase.table("vacantes").delete().lt("fecha_creacion", fecha_limite).execute()
+        
+        print("Pipeline completado exitosamente.")
     except Exception as e:
-        print(f"Error de persistencia en Supabase: {e}")
+        print(f"Error de persistencia en Supabase Engine: {e}")
 
 if __name__ == "__main__":
     ejecutar_scraper()
