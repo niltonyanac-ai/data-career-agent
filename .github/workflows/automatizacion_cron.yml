@@ -2,7 +2,8 @@ name: Actualizacion Automatica de Vacantes
 
 on:
   schedule:
-    - cron: '0 12 * * 1'
+    # 7:00 AM hora de Perú (PET es UTC-5), por lo que debe ejecutarse exactamente a las 12:00 UTC, todos los días
+    - cron: '0 12 * * *'
   workflow_dispatch:
 
 jobs:
@@ -19,7 +20,7 @@ jobs:
 
       - name: Instalar Dependencias Unificadas
         run: |
-          pip install -r requirements.txt
+          pip install --no-cache-dir -r requirements.txt
 
       - name: Ejecutar Extractor de Mercado
         env:
