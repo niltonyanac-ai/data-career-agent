@@ -1,16 +1,3 @@
-import os
-import requests
-from bs4 import BeautifulSoup
-from supabase import create_client, Client
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Error: Variables de entorno de Supabase no configuradas.")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 def ejecutar_scraper():
     print("Iniciando extractor masivo real de LinkedIn...")
     nuevas_vacantes = []
@@ -19,6 +6,14 @@ def ejecutar_scraper():
         "data scientist", "analista de datos", "business intelligence", 
         "inteligencia comercial", "data analyst", "analytics", 
         "ingeniero de datos", "data engineer", "cientifico de datos"
+    ]
+    
+    # Lista negra de palabras clave para purgar perfiles fuera de TI/Data
+    LISTA_NEGRA = [
+        "quimico", "química", "laboratorio", "clinico", "clínico", "creditos", 
+        "créditos", "contable", "contabilidad", "legal", "procesos", "calidad",
+        "rrhh", "recursos humanos", "compras", "inventarios", "microbiologia",
+        "farmaceutico", "biologo", "mantenimiento", "soporte tecnico"
     ]
     
     headers = {
@@ -50,16 +45,34 @@ def ejecutar_scraper():
                         
                         puesto_lower = puesto.lower()
                         
-                        # Mapeo de Especialidades
-                        especialidad = "Data Analytics"
+                        # FILSTRO CRÍTICO: Si el puesto contiene algo de la lista negra, se ignora
+                        if any(negra in puesto_lower for negra in LISTA_NEGRA):
+                            continue
+                            
+                        # VALIDACIÓN DE ENTRADA: Debe tener relación directa con datos o IA
+                        TERMINOS_VALIDOS = ["data", "analyst", "analista", "bi", "intelligence", "inteligencia", "scientist", "cientifico", "analytics", "engineer", "ingeniero", "modelamiento", "machine"]
+                        if not any(valido in puesto_lower for valido in TERMINOS_VALIDOS):
+                            continue
+
+                        # Mapeo estricto de Especialidades
+                        especialidad = None
                         if "bi" in puesto_lower or "intelligence" in puesto_lower or "inteligencia" in puesto_lower:
-                            especialidad = "Business Intelligence"
+                            if "comercial" in puesto_lower:
+                                especialidad = "Inteligencia Comercial"
+                            else:
+                                especialidad = "Business Intelligence"
                         elif "scientist" in puesto_lower or "científico" in puesto_lower or "ciencia" in puesto_lower or "learning" in puesto_lower:
                             especialidad = "Data Science"
                         elif "engineer" in puesto_lower or "ingeniero de datos" in puesto_lower:
                             especialidad = "Data Engineering"
+                        elif "analista de datos" in puesto_lower or "data analyst" in puesto_lower or "analytics" in puesto_lower:
+                            especialidad = "Data Analytics"
                         elif "comercial" in puesto_lower:
                             especialidad = "Inteligencia Comercial"
+                        
+                        # Si no calza explícitamente en nuestro core analítico, se descarta
+                        if not Black_or_White := especialidad:
+                            continue
                             
                         # Clasificación de Jerarquía
                         jerarquia = "Analista"
@@ -86,7 +99,7 @@ def ejecutar_scraper():
                         oferta = {
                             "puesto": puesto,
                             "empresa": empresa,
-                            "especialidad": specialty := especialidad,
+                            "especialidad": especialidad,
                             "jerarquia": jerarquia,
                             "hard_skills": hard_skills,
                             "soft_skills": ["Análisis", "Comunicación"],
@@ -103,11 +116,11 @@ def ejecutar_scraper():
         nuevas_vacantes = nuevas_vacantes[:300]
 
     if len(nuevas_vacantes) == 0:
-        print("La búsqueda arrojó 0 resultados temporales debido a control de tráfico. Resguardando base actual.")
+        print("La búsqueda arrojó 0 resultados válidos tras aplicar el filtro de purga.")
         return
 
     try:
-        print(f"Éxito de extracción. Total procesado: {len(nuevas_vacantes)} ofertas reales.")
+        print(f"Éxito de extracción. Total procesado: {len(nuevas_vacantes)} ofertas puras de Data/IA.")
         print("Vaciando base de datos de manera limpia...")
         supabase.table("vacantes").delete().neq("id", 0).execute()
         
@@ -116,9 +129,6 @@ def ejecutar_scraper():
             lote = nuevas_vacantes[i:i+20]
             supabase.table("vacantes").insert(lote).execute()
             
-        print("Sincronización masiva con LinkedIn completada con éxito.")
+        print("Sincronización masiva completada con éxito.")
     except Exception as e:
         print(f"Error de escritura en Supabase: {e}")
-
-if __name__ == "__main__":
-    ejecutar_scraper()
