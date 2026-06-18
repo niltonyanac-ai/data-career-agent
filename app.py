@@ -3,6 +3,7 @@ import pandas as pd
 import json
 import altair as alt
 from datetime import datetime, timezone
+import os
 from pypdf import PdfReader
 from google import genai
 from google.genai import types
@@ -10,14 +11,14 @@ from pydantic import BaseModel
 from typing import List
 from supabase import create_client, Client
 
-# Configuración del ecosistema visual de la aplicación
+# --- CONFIGURACIÓN DEL ECOSISTEMA VISUAL ---
 st.set_page_config(
     page_title="DataCareer AI - Monitor de Empleabilidad", 
     layout="wide", 
     page_icon="💼"
 )
 
-# Inyección de estilos usando st.html (evita el bug de métricas de st.markdown)
+# Inyección de estilos CSS optimizada
 st.html("""
 <style>
     .main-title { font-size: 2.6rem; font-weight: 800; color: #1E293B; margin-bottom: 0.5rem; }
@@ -26,7 +27,7 @@ st.html("""
 </style>
 """)
 
-# --- Modelado de Datos para Gemini 2.5 Flash ---
+# --- MODELADO DE DATOS PARA GEMINI 2.5 FLASH ---
 class EvaluacionIndividual(BaseModel):
     id_interno: int
     match_score: int
@@ -36,15 +37,16 @@ class EvaluacionIndividual(BaseModel):
 class RespuestaMatchIA(BaseModel):
     evaluaciones: List[EvaluacionIndividual]
 
-# --- Conexión Segura y Recuperación de Datos ---
-@st.cache_data(ttl=300, show_spinner="Sincronizando ofertas del mercado de tecnología...")
+# --- CONEXIÓN SEGURA Y RECUPERACIÓN DE DATOS (CON CACHÉ CONTROLADA) ---
+@st.cache_data(ttl=1800, show_spinner="Sincronizando ofertas del mercado de tecnología...")
 def obtener_data_real():
     try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
+        url = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL")
+        key = st.secrets.get("SUPABASE_KEY") or os.environ.get("SUPABASE_KEY")
         supabase: Client = create_client(url, key)
         
-        respuesta = supabase.table("vacantes").select("*").execute()
+        # Consultamos las vacantes ordenadas por fecha
+        respuesta = supabase.table("vacantes").select("*").order("fecha_creacion", desc=True).execute()
         df = pd.DataFrame(respuesta.data)
         if not df.empty and 'fecha_creacion' in df.columns:
             df['fecha_creacion'] = pd.to_datetime(df['fecha_creacion'])
@@ -55,7 +57,26 @@ def obtener_data_real():
 
 df_vacantes = obtener_data_real()
 
-# --- Encabezado Principal Orientado a la Conversión (UX Limpia y Segura) ---
+# --- FUNCIÓN EXPERTA DE MAPEO Y NORMALIZACIÓN DE JERARQUÍAS ---
+def normalizar_jerarquia(texto):
+    if pd.isna(texto):
+        return "2. Analista Junior / Analista"
+    texto_lower = str(texto).lower()
+    
+    if any(x in texto_lower for x in ["practicante", "asistente", "intern", "trainee", "pasantía"]):
+        return "1. Practicante / Asistente"
+    elif any(x in texto_lower for x in ["senior", "sr", "especialista", "coordinador", "advanced"]):
+        return "3. Analista Senior / Especialista / Coordinador"
+    elif any(x in texto_lower for x in ["lider", "líder", "jefe", "jefatura", "lead", "supervisor"]):
+        return "4. Líder / Jefe"
+    elif any(x in texto_lower for x in ["subgerente", "sub gerente", "sub-gerente", "product owner", "po"]):
+        return "5. Sub Gerente / P.O."
+    elif any(x in texto_lower for x in ["gerente", "manager", "head", "director", "vicedirector"]):
+        return "6. Gerente / Head"
+    else:
+        return "2. Analista Junior / Analista"
+
+# --- ENCABEZADO PRINCIPAL ---
 st.html("""
     <div class="main-title">💼 DataCareer AI</div>
     <div class="subtitle">Encuentra y evalúa tu perfil contra las mejores oportunidades del mercado de Datos, Analítica y Business Intelligence en tiempo real.</div>
@@ -64,32 +85,48 @@ st.html("""
 if df_vacantes.empty:
     st.info("Sincronizando el flujo de datos inicial... Asegúrate de poblar Supabase a través del Scraper.")
 else:
-    # Métricas de Impacto Requeridas
-    total_ofertas = len(df_vacantes)
-    ultima_act = df_vacantes['fecha_creacion'].max().strftime('%d/%m/%Y %H:%M')
+    # Pre-procesar etiquetas de jerarquía normalizadas
+    df_vacantes['jerarquia_limpia'] = df_vacantes['jerarquia'].apply(normalizar_jerarquia)
+    
+    # Inyectar columna transicional de país si no viene en el dataset original
+    if 'pais' not in df_vacantes.columns:
+        df_vacantes['pais'] = 'Perú'
+
+    # --- BARRA LATERAL (FILTROS MULTI-PAÍS Y MERCADO EXPANSIBLE) ---
+    st.sidebar.header("🎯 Filtros del Mercado")
+    
+    paises_disponibles = sorted(df_vacantes['pais'].unique().tolist())
+    paises_sel = st.sidebar.multiselect("País / Región", options=paises_disponibles, default=paises_disponibles)
+    
+    especialidades = sorted(df_vacantes['especialidad'].dropna().unique().tolist())
+    esp_sel = st.sidebar.selectbox("Especialidad Objetivo", ["Todas"] + list(especialidades))
+    
+    jerarquias_disponibles = sorted(df_vacantes['jerarquia_limpia'].unique().tolist())
+    jer_sel = st.sidebar.multiselect("Nivel de Jerarquía / Seniority", options=jerarquias_disponibles, default=jerarquias_disponibles)
+    
+    # --- PROCESAMIENTO DEL FILTRADO DINÁMICO REQUERIDO ---
+    df_filtrado = df_vacantes[
+        (df_vacantes['jerarquia_limpia'].isin(jer_sel)) & 
+        (df_vacantes['pais'].isin(paises_sel))
+    ].copy()
+    
+    if esp_sel != "Todas":
+        df_filtrado = df_filtrado[df_filtrado['especialidad'] == esp_sel]
+
+    # --- METRICAS DE IMPACTO (TOTALMENTE DINÁMICAS BASADAS EN EL FILTRO) ---
+    total_ofertas_filtradas = len(df_filtrado)
+    ultima_act = df_vacantes['fecha_creacion'].max().strftime('%d/%m/%Y %H:%M') if not df_vacantes['fecha_creacion'].isna().all() else "Hoy"
     
     col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
     with col_kpi1:
-        st.metric(label="📊 Ofertas Vigentes Procesadas (Últimos 30 días)", value=total_ofertas, help="Mínimo objetivo del sistema: > 160 ofertas concurrentes.")
+        # CORREGIDO: Responde en tiempo real a los filtros aplicados
+        st.metric(label="📊 Ofertas Vigentes Filtradas", value=total_ofertas_filtradas, help="Indicador dinámico basado en tu segmentación actual.")
     with col_kpi2:
         st.metric(label="🔄 Última Actualización del Pipeline", value=ultima_act)
     with col_kpi3:
         st.metric(label="🎯 Cobertura de Perfiles", value="100% Automatizada")
 
-    # --- Filtros en Barra Lateral ---
-    st.sidebar.header("🎯 Filtros del Mercado")
-    especialidades = sorted(df_vacantes['especialidad'].unique().tolist())
-    esp_sel = st.sidebar.selectbox("Especialidad Objetivo", ["Todas"] + list(especialidades))
-    
-    jerarquias = sorted(df_vacantes['jerarquia'].unique().tolist())
-    jer_sel = st.sidebar.multiselect("Nivel de Jerarquía / Seniority", jerarquias, default=jerarquias)
-    
-    # Filtrado Dinámico usando .copy() para evitar SettingWithCopyWarning
-    df_filtrado = df_vacantes[df_vacantes['jerarquia'].isin(jer_sel)].copy()
-    if esp_sel != "Todas":
-        df_filtrado = df_filtrado[df_filtrado['especialidad'] == esp_sel]
-
-    # --- Estructura de Pestañas ---
+    # --- ESTRUCTURA DE PESTAÑAS ---
     tab_mercado, tab_evaluador = st.tabs(["📊 Tablero del Mercado", "🔍 Evaluador ATS de CV"])
     
     with tab_mercado:
@@ -99,49 +136,60 @@ else:
             col_g1, col_g2 = st.columns(2)
             
             with col_g1:
-                # 1. Gráfico de Niveles Jerárquicos
-                st.markdown("**Distribución de Ofertas por Seniority**")
+                # 1. Gráfico de Niveles Jerárquicos Normalizados
+                st.markdown("**Distribución de Ofertas por Seniority (Mapeado Profesional)**")
                 chart_jer = alt.Chart(df_filtrado).mark_bar(cornerRadiusTopRight=4).encode(
                     x=alt.X('count():Q', title='Cantidad de Vacantes'),
-                    y=alt.Y('jerarquia:N', sort='-x', title='Nivel Jerárquico'),
-                    color=alt.Color('jerarquia:N', scale=alt.Scale(scheme='tableau10'), legend=None)
+                    y=alt.Y('jerarquia_limpia:N', sort='x', title='Nivel Jerárquico'),
+                    color=alt.Color('jerarquia_limpia:N', scale=alt.Scale(scheme='tableau10'), legend=None)
                 ).properties(height=220)
                 st.altair_chart(chart_jer, use_container_width=True)
                 
-                # 2. Antigüedad de las Ofertas (Seguro gracias al .copy() previo)
-                st.markdown("**Antigüedad de Publicación (Días transcurridos)**")
-                df_filtrado['dias_antiguedad'] = (datetime.now(timezone.utc) - df_filtrado['fecha_creacion']).dt.days
-                chart_ant = alt.Chart(df_filtrado).mark_bar(color='#475569').encode(
-                    x=alt.X('dias_antiguedad:O', title='Días de Antigüedad'),
-                    y=alt.Y('count():Q', title='Número de Ofertas')
-                ).properties(height=180)
-                st.altair_chart(chart_ant, use_container_width=True)
+                # 2. REEMPLAZO: Top 5 Soft Skills Requeridas en lugar de Antigüedad
+                st.markdown("**Top 5 Soft Skills más Solicitadas por la Industria**")
+                if 'soft_skills' in df_filtrado.columns:
+                    df_soft = df_filtrado.explode('soft_skills')
+                    df_soft_counts = df_soft['soft_skills'].value_counts().reset_index().head(5)
+                    df_soft_counts.columns = ['Soft Skill', 'Frecuencia']
+                    
+                    chart_soft = alt.Chart(df_soft_counts).mark_bar(color='#FF9800', cornerRadiusTopRight=4).encode(
+                        x=alt.X('Frecuencia:Q', title='Demanda en Ofertas'),
+                        y=alt.Y('Soft Skill:N', sort='-x', title='Habilidad Blanda'),
+                        tooltip=['Soft Skill', 'Frecuencia']
+                    ).properties(height=200)
+                    st.altair_chart(chart_soft, use_container_width=True)
+                else:
+                    st.info("No se registran datos estructurados de Soft Skills en este segmento.")
 
             with col_g2:
-                # 3. Top 10 Empresas Contratantes
+                # 3. CORREGIDO: Top 10 Empresas Contratantes Completo (Forzado a .head(10))
                 st.markdown("**Top 10 Líderes de Contratación**")
                 top_empresas = df_filtrado['empresa'].value_counts().reset_index().head(10)
                 top_empresas.columns = ['empresa', 'count']
-                chart_emp = alt.Chart(top_empresas).mark_bar(color='#0EA5E9').encode(
+                
+                chart_emp = alt.Chart(top_empresas).mark_bar(color='#0EA5E9', cornerRadiusTopRight=4).encode(
                     x=alt.X('count:Q', title='Vacantes Activas'),
-                    y=alt.Y('empresa:N', sort='-x', title='Empresa')
+                    y=alt.Y('empresa:N', sort='-x', title='Empresa'),
+                    tooltip=['empresa', 'count']
                 ).properties(height=220)
                 st.altair_chart(chart_emp, use_container_width=True)
                 
                 # 4. Análisis Agregado de Hard Skills Demandadas
                 st.markdown("**Top de Tecnologías y Hard Skills más Pedidas**")
-                skills_series = df_filtrado['hard_skills'].explode().value_counts().reset_index().head(8)
-                skills_series.columns = ['Skill', 'Frecuencia']
-                chart_skills = alt.Chart(skills_series).mark_bar(color='#10B981').encode(
-                    x=alt.X('Frecuencia:Q', title='Menciones en Ofertas'),
-                    y=alt.Y('Skill:N', sort='-x', title='Tecnología')
-                ).properties(height=180)
-                st.altair_chart(chart_skills, use_container_width=True)
+                if 'hard_skills' in df_filtrado.columns:
+                    skills_series = df_filtrado['hard_skills'].explode().value_counts().reset_index().head(8)
+                    skills_series.columns = ['Skill', 'Frecuencia']
+                    chart_skills = alt.Chart(skills_series).mark_bar(color='#10B981', cornerRadiusTopRight=4).encode(
+                        x=alt.X('Frecuencia:Q', title='Menciones en Ofertas'),
+                        y=alt.Y('Skill:N', sort='-x', title='Tecnología'),
+                        tooltip=['Skill', 'Frecuencia']
+                    ).properties(height=200)
+                    st.altair_chart(chart_skills, use_container_width=True)
 
             # Vista detallada de Datos
             st.markdown("### 📋 Listado de Posiciones del Mercado Filtrado")
             st.dataframe(
-                df_filtrado[['puesto', 'empresa', 'especialidad', 'jerarquia', 'link']],
+                df_filtrado[['puesto', 'empresa', 'especialidad', 'jerarquia_limpia', 'link']],
                 use_container_width=True,
                 column_config={"link": st.column_config.LinkColumn("Enlace Postulación")}
             )
@@ -152,7 +200,6 @@ else:
         st.subheader("🤖 Escáner de Compatibilidad ATS por Inteligencia Artificial")
         st.markdown("Sube tu CV para contrastarlo en tiempo real mediante IA con las palabras clave e intenciones de búsqueda de nuestro mercado indexado.")
         
-        # Ajustado a formatos con extracción de texto nativa garantizada
         archivo_cv = st.file_uploader("Carga tu Currículum Vitae", type=["pdf", "txt"])
         
         if archivo_cv and not df_filtrado.empty:
@@ -221,22 +268,24 @@ else:
                         
                         if not df_evaluaciones.empty:
                             df_final = df_filtrado.merge(df_evaluaciones, left_on='id', right_on='id_interno')
-                            # Filtro estricto del requerimiento: Match mayor o igual al 70%
-                            df_final = df_final[df_final['match_score'] >= 70]
-                            df_final = df_final.sort_values(by='match_score', ascending=False)
                             
-                            st.markdown("### 🎯 Ofertas Afines Recomendadas (>70% Match)")
+                            # CORREGIDO: Ordenar por afinidad y restringir estrictamente al TOP 10 de mayor Match
+                            df_final = df_final.sort_values(by='match_score', ascending=False).head(10)
                             
-                            if df_final.empty:
-                                st.info("Se completó el análisis, pero ninguna vacante actual cumple con el umbral del 70% de afinidad estructural.")
-                            else:
-                                for _, rank in df_final.iterrows():
-                                    with st.expander(f"🟢 {rank['match_score']}% Match — {rank['puesto']} en {rank['empresa']}"):
-                                        st.write(f"**💼 Especialidad:** {rank['especialidad']} | **🎯 Jerarquía:** {rank['jerarquia']}")
-                                        st.info(f"**Coincidencias Identificadas:** {rank['coincidencias']}")
-                                        if rank['skills_faltantes']:
-                                            st.warning(f"**Gaps identified (Habilidades recomendadas a adquirir):** {', '.join(rank['skills_faltantes'])}")
-                                        st.markdown(f"[👉 Postular Directamente en LinkedIn]({rank['link']})")
+                            st.markdown("### 🎯 Top 10 Ofertas más Relevantes según tu CV")
+                            
+                            for _, rank in df_final.iterrows():
+                                # Definir color del tag del Match Score visual
+                                color_tag = "🟢" if rank['match_score'] >= 70 else "🟡" if rank['match_score'] >= 45 else "🔴"
+                                
+                                with st.expander(f"{color_tag} {rank['match_score']}% Match — {rank['puesto']} en {rank['empresa']}"):
+                                    st.write(f"**💼 Especialidad:** {rank['especialidad']} | **🎯 Jerarquía:** {rank['jerarquia_limpia']}")
+                                    st.info(f"**Palabras Clave / Coincidencias Identificadas:** {rank['coincidencias']}")
+                                    
+                                    if rank['skills_faltantes']:
+                                        st.warning(f"**Filtro ATS - Habilidades Críticas Faltantes (Para optimizar tu CV):** {', '.join(rank['skills_faltantes'])}")
+                                    
+                                    st.markdown(f"[👉 Postular Directamente en el Enlace]({rank['link']})")
                         else:
                             st.warning("El motor cognitivo no pudo correlacionar la matriz del perfil.")
                     except Exception as ex:
