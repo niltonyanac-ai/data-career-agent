@@ -55,12 +55,11 @@ def obtener_data_real():
 
 df_vacantes = obtener_data_real()
 
-# --- Encabezado Principal Orientado a la Conversión (UX Vendedora) ---
-st.markdown('<div class="main-title">💼 DataCareer AI</div>', unsafe_allowed_html=True)
-st.markdown(
-    '<div class="subtitle">Encuentra y evalúa tu perfil contra las mejores oportunidades del mercado de Datos, Analítica y Business Intelligence en tiempo real.</div>', 
-    unsafe_allowed_html=True
-)
+# --- Encabezado Principal Orientado a la Conversión (UX Limpia y Segura) ---
+st.html("""
+    <div class="main-title">💼 DataCareer AI</div>
+    <div class="subtitle">Encuentra y evalúa tu perfil contra las mejores oportunidades del mercado de Datos, Analítica y Business Intelligence en tiempo real.</div>
+""")
 
 if df_vacantes.empty:
     st.info("Sincronizando el flujo de datos inicial... Asegúrate de poblar Supabase a través del Scraper.")
