@@ -1,7 +1,10 @@
 import streamlit as st
 import pandas as pd
 import json
+import hashlib
+import threading
 import google.generativeai as genai
+import google.api_core.exceptions as google_exceptions
 from pydantic import BaseModel, Field
 from concurrent.futures import ThreadPoolExecutor
 from pypdf import PdfReader
@@ -28,7 +31,7 @@ st.markdown("""
         border: 1px solid #e2e8f0; 
         padding: 20px; 
         border-radius: 10px; 
-        margin-bottom: 5px; 
+        margin-bottom: 15px; 
         background-color: #ffffff;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     }
@@ -36,12 +39,28 @@ st.markdown("""
         color: #1e3a8a;
         font-weight: 800;
     }
+    .action-link {
+        display: inline-block;
+        margin-top: 10px;
+        padding: 8px 16px;
+        background-color: #1e3a8a;
+        color: white !important;
+        text-decoration: none;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 0.9em;
+    }
+    .action-link:hover {
+        background-color: #1e40af;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Inicializar estados de sesión para estabilidad en rerenders
+# Inicialización de estado para CV y Caché
 if "texto_cv_usuario" not in st.session_state:
     st.session_state["texto_cv_usuario"] = ""
+if "ats_cache" not in st.session_state:
+    st.session_state["ats_cache"] = {} # Diccionario para almacenar resultados previos por Hash
 
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -71,6 +90,43 @@ def normalizar_jerarquia(texto):
     if "junior" in t or "jr" in t: return "2. Analista Junior"
     return "2. Analista / Profesional"
 
+def pre_ranking_heuristico(df, texto_cv):
+    cv_clean = str(texto_cv).lower()
+    scores = []
+    stop_words = {"para", "como", "esta", "este", "todo", "sino", "pero", "experiencia", "conocimiento", "manejo", "perfil"}
+    keywords_niveles = {
+        "1.": ["practicante", "asistente", "intern", "trainee"],
+        "2.": ["junior", "jr", "analista", "professional"],
+        "3.": ["senior", "sr", "especialista", "advanced", "experto"],
+        "4.": ["lider", "lead", "jefe", "supervisor"],
+        "5.": ["subgerente", "sub-gerente", "product owner"],
+        "6.": ["gerente", "manager", "director", "head", "chief"]
+    }
+    
+    for _, fila in df.iterrows():
+        score_local = 0
+        jerarquia_puesto = str(fila.get('jerarquia_limpia', ''))
+        
+        for prefix, tokens in keywords_niveles.items():
+            if prefix in jerarquia_puesto:
+                if any(t in cv_clean for t in tokens):
+                    score_local += 40
+                break
+        
+        desc_puesto = str(fila.get('descripcion', '')).lower()
+        palabras_filtradas = [
+            p for p in desc_puesto.replace(',', ' ').replace('.', ' ').replace(':', ' ').split() 
+            if len(p) > 3 and p not in stop_words
+        ]
+        
+        coincidencias_tech = sum(1 for p in palabras_filtradas[:20] if p in cv_clean)
+        score_local += (coincidencias_tech * 5)
+        scores.append(score_local)
+        
+    df_ranked = df.copy()
+    df_ranked['_score_heuristico'] = scores
+    return df_ranked.sort_values(by='_score_heuristico', ascending=False).drop(columns=['_score_heuristico'])
+
 def extraer_texto_pdf(archivo_pdf):
     try:
         lector = PdfReader(archivo_pdf)
@@ -83,36 +139,103 @@ def extraer_texto_pdf(archivo_pdf):
         st.error(f"Error al procesar el archivo PDF: {str(e)}")
         return ""
 
-def evaluar_cv_contra_vacante(texto_cv, fila_vacante, modelo="gemini-1.5-flash"):
+def evaluar_cv_contra_vacante(args):
+    """
+    Función optimizada. Lee primero desde el caché si el Hash del CV coincide.
+    Implementa manejo de errores granulares para APIs de Google.
+    """
+    texto_cv = args["texto_cv"]
+    fila_vacante = args["fila_vacante"]
+    model_instance = args["model_instance"]
+    cache_dict = args["cache_dict"]
+    cv_hash = args["cv_hash"]
+    
+    # 1. VERIFICACIÓN DE CACHÉ
+    llave_vacante = f"{fila_vacante.get('titulo', 'SD')}_{fila_vacante.get('empresa', 'SD')}_{fila_vacante.get('link_oferta', 'SD')}"
+    llave_cache = f"{cv_hash}_{llave_vacante}"
+    
+    if llave_cache in cache_dict:
+        return cache_dict[llave_cache] # Retorno instantáneo sin llamar a Gemini
+
+    # 2. LLAMADA AL LLM SI NO ESTÁ EN CACHÉ
     detalles_oferta = f"""
     Título: {fila_vacante.get('titulo', 'No especificado')}
+    Empresa: {fila_vacante.get('empresa', 'No especificada')}
     Especialidad: {fila_vacante.get('especialidad_objetivo', 'No especificado')}
     Jerarquía: {fila_vacante.get('jerarquia', 'No especificado')}
     Descripción: {fila_vacante.get('descripcion', 'No especificada')}
     """
-    prompt_sistema = "Eres un validador ATS experto en reclutamiento para Data, Analítica e IA. Evalúa con alto rigor técnico y penaliza omisiones."
     prompt_usuario = f"VACANTE:\n{detalles_oferta}\n\nCV:\n{texto_cv}"
     
+    resultado_base = {
+        "titulo": fila_vacante.get("titulo", "Puesto No Especificado"),
+        "empresa": fila_vacante.get("empresa", "Empresa No Especificada"),
+        "link": fila_vacante.get("link_oferta"),
+        "jerarquia_evaluada": fila_vacante.get('jerarquia_limpia', 'No clasificada'),
+        "match_score": 0,
+        "coincidentes": [],
+        "faltantes": [],
+        "llave_cache": llave_cache # Se pasa la llave para que el hilo principal guarde el resultado
+    }
+    
     try:
-        model = genai.GenerativeModel(model_name=modelo, system_instruction=prompt_sistema)
-        response = model.generate_content(
+        response = model_instance.generate_content(
             prompt_usuario,
             generation_config=genai.types.GenerationConfig(
                 response_mime_type="application/json", response_schema=EvaluacionMatch, temperature=0.0
             )
         )
         evaluacion = json.loads(response.text)
-        return {
-            "titulo": fila_vacante.get("titulo", "Puesto No Especificado"),
-            "empresa": fila_vacante.get("empresa", "Empresa No Especificada"),
-            "link": fila_vacante.get("link_oferta"),
+        resultado_base.update({
             "match_score": evaluacion.get("match_score", 0),
-            "justificacion": evaluacion.get("justificacion", "Sin justificación."),
+            "justificacion": evaluacion.get("justificacion", "Análisis completado."),
             "coincidentes": evaluacion.get("habilidades_coincidentes", []),
             "faltantes": evaluacion.get("habilidades_faltantes", [])
-        }
+        })
+        return resultado_base
+        
+    # MANEJO DE ERRORES ESPECÍFICOS DE PRODUCCIÓN
+    except google_exceptions.ResourceExhausted:
+        resultado_base["justificacion"] = "⚠️ Cuota excedida: Nuestros servidores están procesando demasiadas solicitudes en este momento (Rate Limit). Por favor, intenta de nuevo en unos minutos."
+        return resultado_base
+    except google_exceptions.ServiceUnavailable:
+        resultado_base["justificacion"] = "🔌 Servicio temporalmente fuera de línea. Google Gemini está experimentando interrupciones intermitentes."
+        return resultado_base
+    except ValueError as e:
+        # Esto captura los bloqueos de filtros de seguridad (StopCandidateException a veces se empaqueta aquí)
+        if "StopCandidate" in str(e) or "safety" in str(e).lower():
+            resultado_base["justificacion"] = "🛡️ Análisis bloqueado: El sistema de seguridad de la IA detuvo el escaneo. Asegúrate de que el documento no contenga información sensible o términos restringidos."
+        else:
+            resultado_base["justificacion"] = f"❌ Error de parseo en la respuesta de la IA: {str(e)}"
+        return resultado_base
     except Exception as e:
-        return {"titulo": fila_vacante.get("titulo"), "empresa": fila_vacante.get("empresa"), "link": fila_vacante.get("link_oferta"), "match_score": 0, "justificacion": f"Error: {str(e)}", "coincidentes": [], "faltantes": []}
+        resultado_base["justificacion"] = f"❌ Error interno de procesamiento: {str(e)}"
+        return resultado_base
+
+# =====================================================================
+# 3.5. TELEMETRÍA EN SEGUNDO PLANO
+# =====================================================================
+def registrar_telemetria_silenciosa(resultados_analisis):
+    """ Función Fire-and-Forget para registrar estadísticas sin bloquear la UI """
+    if not SUPABASE_AVAILABLE or "SUPABASE_URL" not in st.secrets:
+        return
+        
+    try:
+        supabase: Client = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+        datos_insertar = []
+        for res in resultados_analisis:
+            if res.get("match_score", 0) > 0: # Solo guardamos intentos válidos
+                datos_insertar.append({
+                    "jerarquia": res.get("jerarquia_evaluada", "Desconocida"),
+                    "score": res["match_score"],
+                    "origen": "Aplicación ATS"
+                })
+        
+        if datos_insertar:
+            # Asume que existe una tabla 'telemetria_ats' en Supabase
+            supabase.table("telemetria_ats").insert(datos_insertar).execute()
+    except Exception:
+        pass # Silenciamos el error deliberadamente para no afectar al usuario
 
 # =====================================================================
 # 4. FLUJO DE CARGA Y CONEXIÓN DE DATOS (SUPABASE INTERFACE)
@@ -137,18 +260,30 @@ def cargar_datos_seguros():
 df_raw = cargar_datos_seguros()
 df_vacantes = df_raw.copy()
 
-if 'pais' not in df_vacantes.columns: df_vacantes['pais'] = 'Perú'
-else: df_vacantes['pais'] = df_vacantes['pais'].fillna('Latam / Remoto').astype(str).str.title()
+columnas_requeridas = {
+    'titulo': 'Puesto No Especificado',
+    'empresa': 'Empresa No Especificada',
+    'pais': 'Perú',
+    'jerarquia': 'Analista / Profesional',
+    'descripcion': 'Sin descripción disponible.',
+    'link_oferta': None
+}
+for col, valor_defecto in columnas_requeridas.items():
+    if col not in df_vacantes.columns:
+        df_vacantes[col] = valor_defecto
+
+df_vacantes['pais'] = df_vacantes['pais'].fillna('Latam / Remoto').astype(str).str.title()
 df_vacantes['jerarquia_limpia'] = df_vacantes['jerarquia'].apply(normalizar_jerarquia)
 
 # =====================================================================
 # 5. INTERFAZ DE USUARIO (UX/UI STREAMLIT)
 # =====================================================================
 st.sidebar.header("🎯 Filtros del Mercado")
-lista_paises = sorted(df_vacantes['pais'].unique())
+
+lista_paises = sorted(list(df_vacantes['pais'].unique()))
 paises_seleccionados = st.sidebar.multiselect("País / Región", options=lista_paises, default=lista_paises)
 
-lista_jerarquias = sorted(df_vacantes['jerarquia_limpia'].unique())
+lista_jerarquias = sorted(list(df_vacantes['jerarquia_limpia'].unique()))
 jerarquias_seleccionadas = st.sidebar.multiselect("Nivel de Jerarquía / Seniority", options=lista_jerarquias, default=lista_jerarquias)
 
 df_filtrado = df_vacantes[(df_vacantes['pais'].isin(paises_seleccionados)) & (df_vacantes['jerarquia_limpia'].isin(jerarquias_seleccionadas))].reset_index(drop=True)
@@ -169,7 +304,7 @@ with tab_mercado:
         st.bar_chart(df_filtrado['jerarquia_limpia'].value_counts())
         st.dataframe(df_filtrado[['titulo', 'empresa', 'pais', 'jerarquia_limpia']], use_container_width=True)
     else:
-        st.info("No hay registros que coincidan con los filtros seleccionados.")
+        st.info("No hay registros que coincidan con los filtros seleccionados de la barra lateral.")
 
 with tab_evaluador:
     st.subheader("🤖 Escáner de Compatibilidad ATS por Inteligencia Artificial")
@@ -188,13 +323,48 @@ with tab_evaluador:
     if st.button("🚀 Ejecutar Match Inteligente"):
         if not st.session_state["texto_cv_usuario"].strip():
             st.error("Por favor, sube un archivo PDF válido antes de ejecutar el análisis.")
-        elif df_filtrado.empty:
-            st.error("No hay vacantes en los segmentos seleccionados para realizar el contraste.")
+        elif df_vacantes.empty:
+            st.error("La base de datos de origen está vacía. No hay vacantes disponibles para comparar.")
         else:
-            with st.spinner("Procesando comparación ATS concurrente con Gemini Engine..."):
-                lista_filas = [fila for _, fila in df_filtrado.iterrows()]
+            df_analizar = df_filtrado if not df_filtrado.empty else df_vacantes
+            
+            if df_filtrado.empty:
+                st.warning("⚠️ Nota: Como has desmarcado los filtros, el análisis se ejecutará usando todas las vacantes históricas disponibles en el sistema.")
+            
+            # Generación de la huella digital (Hash MD5) del CV actual
+            cv_hash = hashlib.md5(st.session_state["texto_cv_usuario"].encode('utf-8')).hexdigest()
+            
+            MAX_LLM_CALLS = 10
+            if len(df_analizar) > MAX_LLM_CALLS:
+                with st.spinner("Realizando pre-ranking de relevancia estadística..."):
+                    df_analizar = pre_ranking_heuristico(df_analizar, st.session_state["texto_cv_usuario"]).head(MAX_LLM_CALLS)
+                st.info(f"💡 Seleccionamos las {MAX_LLM_CALLS} ofertas con mayor correlación preliminar.")
+                
+            with st.spinner("Procesando comparación ATS..."):
+                prompt_sistema = "Eres un validador ATS experto en reclutamiento para Data, Analítica e IA. Evalúa con alto rigor técnico y penaliza omisiones."
+                shared_model = genai.GenerativeModel(model_name="gemini-1.5-flash", system_instruction=prompt_sistema)
+                
+                payloads = [
+                    {
+                        "texto_cv": st.session_state["texto_cv_usuario"],
+                        "fila_vacante": fila,
+                        "model_instance": shared_model,
+                        "cache_dict": st.session_state["ats_cache"],
+                        "cv_hash": cv_hash
+                    }
+                    for _, fila in df_analizar.iterrows()
+                ]
+                
                 with ThreadPoolExecutor(max_workers=5) as executor:
-                    resultados_analisis = list(executor.map(lambda f: evaluar_cv_contra_vacante(st.session_state["texto_cv_usuario"], f), lista_filas))
+                    resultados_analisis = list(executor.map(evaluar_cv_contra_vacante, payloads))
+                
+                # Actualizar el caché en el hilo principal con los nuevos resultados
+                for res in resultados_analisis:
+                    if "llave_cache" in res and res.get("match_score", 0) > 0:
+                        st.session_state["ats_cache"][res["llave_cache"]] = res
+
+            # Despachar telemetría de forma asíncrona (no bloqueante)
+            threading.Thread(target=registrar_telemetria_silenciosa, args=(resultados_analisis,), daemon=True).start()
             
             df_resultados = pd.DataFrame(resultados_analisis).sort_values(by="match_score", ascending=False).reset_index(drop=True)
             st.success("¡Análisis de compatibilidad finalizado!")
@@ -202,31 +372,36 @@ with tab_evaluador:
             for idx, res in df_resultados.iterrows():
                 score = res["match_score"]
                 color_badge = "#2ecc71" if score >= 75 else ("#f39c12" if score >= 45 else "#e74c3c")
-                s_coincidentes = ', '.join(res['coincidentes']) if res['coincidentes'] else 'Ninguna detectada explícitamente.'
-                s_faltantes = ', '.join(res['faltantes']) if res['faltantes'] else 'Ninguna brecha crítica encontrada.'
+                
+                coincide_list = res.get('coincidentes', [])
+                falta_list = res.get('faltantes', [])
+                
+                s_coincidentes = ', '.join(coincide_list) if coincide_list else 'Ninguna detectada explícitamente.'
+                s_faltantes = ', '.join(falta_list) if falta_list else 'Ninguna brecha crítica encontrada.'
+                
+                link_html = ""
+                if res.get("link"):
+                    link_html = f'<a href="{res["link"]}" target="_blank" class="action-link">🎯 Ver vacante activa en {res["empresa"]}</a>'
                 
                 st.markdown(f"""
                 <div class="match-card">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #f1f5f9; padding-bottom: 10px;">
                         <h4 style="margin: 0; color: #1e3a8a; font-size: 1.25em;">
-                            {res['titulo']} <span style="color: #6b7280; font-size: 0.85em; font-weight: normal;">({res['empresa']})</span>
+                            {res.get('titulo', 'Puesto No Especificado')} <span style="color: #6b7280; font-size: 0.85em; font-weight: normal;">({res.get('empresa', 'Empresa No Especificada')})</span>
                         </h4>
                         <span style="background-color: {color_badge}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.9em; white-space: nowrap;">
                             {score}% Match
                         </span>
                     </div>
                     <div style="margin-bottom: 12px; color: #334155; font-size: 0.95em; line-height: 1.5;">
-                        <strong style="color: #0f172a;">Análisis Estratégico ATS:</strong> {res['justificacion']}
+                        <strong style="color: #0f172a;">Análisis Estratégico ATS:</strong> {res.get('justificacion', 'Sin justificación.')}
                     </div>
                     <div style="margin-bottom: 8px; font-size: 0.9em; color: #16a34a;">
                         <strong>✓ Habilidades Coincidentes:</strong> {s_coincidentes}
                     </div>
-                    <div style="margin-bottom: 5px; font-size: 0.9em; color: #dc2626;">
+                    <div style="margin-bottom: 12px; font-size: 0.9em; color: #dc2626;">
                         <strong>✗ Brechas Técnicas Detectadas:</strong> {s_faltantes}
                     </div>
+                    {link_html}
                 </div>
                 """, unsafe_allow_html=True)
-                
-                if res.get("link"):
-                    st.link_button(f"🎯 Ver vacante activa en {res['empresa']}", url=res["link"], key=f"btn_lnk_{idx}")
-                st.write("")
