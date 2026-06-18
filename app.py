@@ -105,20 +105,24 @@ else:
                         st.session_state.procesando_cv = True
                         cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
                         
-                        with st.spinner("⚡ Analizando afinidad en tiempo real con IA..."):
-                            df_ordenado = df_f.sort_values(by='fecha_creacion', ascending=False)
-                            contexto_ia = df_ordenado.head(25)[['id', 'puesto', 'jerarquia', 'hard_skills']].to_json(orient='records')
+                       with st.spinner("⚡ Analizando afinidad en tiempo real con IA..."):
+                            # DETERMINISMO 1: Forzar ordenamiento estricto por ID para que el contexto JSON sea idéntico siempre
+                            df_ordenado = df_f.sort_values(by='id', ascending=True)
+                            contexto_ia = df_ordenado.head(30)[['id', 'puesto', 'jerarquia', 'hard_skills']].to_json(orient='records')
                             cv_recortado = texto[:1500].replace("\n", " ")
                             
+                            # DETERMINISMO 2: Prompt ultra-estructurado sin ambigüedades interpretativas
                             prompt_blindado = (
-                                f"Actúas como un reclutador corporativo técnico e implacable. "
-                                f"Evalúa minuciosamente el siguiente CV recortado: {cv_recortado}. "
-                                f"Mapea su afinidad contra este JSON de ofertas usando el id en id_interno: {contexto_ia}.\n\n"
-                                f"Reglas matemáticas obligatorias para calcular el match_score (0 a 100):\n"
-                                f"1. Si una oferta indica jerarquía 'Senior' o 'Líder / Jefatura' y el CV no refleja explícitamente años de experiencia sólida a cargo, el match máximo permitido es 55%.\n"
-                                f"2. Saber SQL y Excel NO valida a un candidato para puestos etiquetados como 'Data Scientist' o 'Machine Learning Engineer'. Si no hay fundamentos estadísticos o de modelamiento evidentes en el CV para estos roles, el match máximo permitido es 45%.\n"
-                                f"3. Reserva puntajes mayores al 85% únicamente si el rol, el seniority requerido y las tecnologías específicas calzan de manera exacta.\n"
-                                f"Extrae en la estructura JSON solicitada SOLO aquellos registros cuyo cálculo matemático estricto supere el 70%."
+                                f"Eres un algoritmo de emparejamiento matemático frío y determinista. Tu objetivo es emparejar un CV con un catálogo de ofertas de empleo.\n\n"
+                                f"Entrada CV: {cv_recortado}\n"
+                                f"Entrada Ofertas (JSON): {contexto_ia}\n\n"
+                                f"INSTRUCCIONES DE PROCESAMIENTO OBLIGATORIAS:\n"
+                                f"1. Procesa cada oferta una por una en el orden exacto proporcionado.\n"
+                                f"2. Aplica penalizaciones estrictas fijas:\n"
+                                f"   - Si la oferta requiere jerarquía 'Senior' o 'Líder / Jefatura' y el CV no tiene más de 5 años de experiencia explícitos, el match score se limita a un techo máximo de 50%.\n"
+                                f"   - Si la oferta es para 'Data Science' y el CV no lista modelos matemáticos, algoritmos o Python/R, el match score máximo es 40%.\n"
+                                f"3. Calcula el match score final basándote únicamente en hechos verificables en el texto proporcionado.\n"
+                                f"4. Devuelve en la estructura JSON requerida SOLAMENTE aquellos registros cuyo cálculo numérico final sea estrictamente mayor o igual a 70%. No inventes ni varíes la lógica bajo ninguna circunstancia."
                             )
                             
                             resp = cliente.models.generate_content(
@@ -127,7 +131,7 @@ else:
                                 config=types.GenerateContentConfig(
                                     response_mime_type="application/json", 
                                     response_schema=RespuestaMatchIA,
-                                    temperature=0.0
+                                    temperature=0.0  # Obliga a elegir la respuesta de máxima probabilidad matemática
                                 )
                             )
                             
