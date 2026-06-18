@@ -3,12 +3,12 @@ import requests
 from bs4 import BeautifulSoup
 from supabase import create_client, Client
 
-# Configuración de entorno seguro
-SUPABASE_URL = "https://ktevmevkvrxbeaamdnvy.supabase.co"
-SUPABASE_KEY = "sb_secret_BxCedbLKl1J_7ePbamZnzg_kZvNhfdA"
+# Configuración 100% segura basada en las variables que ya tienes en GitHub
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Error crítico: Credenciales de acceso a Supabase ausentes.")
+    raise ValueError("Error crítico: Credenciales de acceso seguras de Supabase no detectadas en el entorno.")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
