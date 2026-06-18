@@ -85,8 +85,8 @@ else:
     jerarquias = sorted(df_vacantes['jerarquia'].unique().tolist())
     jer_sel = st.sidebar.multiselect("Nivel de Jerarquía / Seniority", jerarquias, default=jerarquias)
     
-    # Filtrado Dinámico de DataFrames
-    df_filtrado = df_vacantes[df_vacantes['jerarquia'].isin(jer_sel)]
+    # Filtrado Dinámico usando .copy() para evitar SettingWithCopyWarning
+    df_filtrado = df_vacantes[df_vacantes['jerarquia'].isin(jer_sel)].copy()
     if esp_sel != "Todas":
         df_filtrado = df_filtrado[df_filtrado['especialidad'] == esp_sel]
 
@@ -109,7 +109,7 @@ else:
                 ).properties(height=220)
                 st.altair_chart(chart_jer, use_container_width=True)
                 
-                # 2. Antigüedad de las Ofertas
+                # 2. Antigüedad de las Ofertas (Seguro gracias al .copy() previo)
                 st.markdown("**Antigüedad de Publicación (Días transcurridos)**")
                 df_filtrado['dias_antiguedad'] = (datetime.now(timezone.utc) - df_filtrado['fecha_creacion']).dt.days
                 chart_ant = alt.Chart(df_filtrado).mark_bar(color='#475569').encode(
@@ -153,7 +153,8 @@ else:
         st.subheader("🤖 Escáner de Compatibilidad ATS por Inteligencia Artificial")
         st.markdown("Sube tu CV para contrastarlo en tiempo real mediante IA con las palabras clave e intenciones de búsqueda de nuestro mercado indexado.")
         
-        archivo_cv = st.file_uploader("Carga tu Currículum Vitae", type=["pdf", "txt", "docx"])
+        # Ajustado a formatos con extracción de texto nativa garantizada
+        archivo_cv = st.file_uploader("Carga tu Currículum Vitae", type=["pdf", "txt"])
         
         if archivo_cv and not df_filtrado.empty:
             if st.button("🚀 Ejecutar Match Inteligente"):
@@ -169,23 +170,21 @@ else:
                                 texto_cv += pagina.extract_text() or ""
                         elif nombre_archivo.endswith('.txt'):
                             texto_cv = archivo_cv.read().decode("utf-8")
-                        else:
-                            # Fallback seguro para DOCX si se procesa como texto crudo estructurado
-                            texto_cv = str(archivo_cv.read(), errors='ignore')
                         
                         if len(texto_cv.strip()) < 50:
-                            st.error("No se pudo extraer suficiente texto legible de tu documento. Por favor, verifica el formato.")
+                            st.error("No se pudo extraer suficiente texto legible de tu documento. Por favor, verifica que no sea una imagen escaneada.")
                             st.stop()
 
-                        # Preparar payload de vacantes reducido para no agotar la ventana de contexto
+                        # Preparar payload de vacantes reducido y blindado contra nulos
                         contexto_vacantes = []
                         for _, row in df_filtrado.iterrows():
+                            id_seguro = int(row['id']) if pd.notnull(row['id']) else 0
                             contexto_vacantes.append({
-                                "id": int(row['id']),
+                                "id": id_seguro,
                                 "puesto": str(row['puesto']),
                                 "empresa": str(row['empresa']),
-                                "hard_skills": row['hard_skills'],
-                                "soft_skills": row['soft_skills']
+                                "hard_skills": row['hard_skills'] if isinstance(row['hard_skills'], list) else [],
+                                "soft_skills": row['soft_skills'] if isinstance(row['soft_skills'], list) else []
                             })
                         
                         # Instanciar cliente oficial Google GenAI
