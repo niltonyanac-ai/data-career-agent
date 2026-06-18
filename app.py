@@ -10,9 +10,10 @@ from pydantic import BaseModel
 from typing import List
 from supabase import create_client, Client
 
+# Configuración de página inicial en la raíz del script
 st.set_page_config(page_title="DataCareer AI", layout="wide", page_icon="💼")
 
-# --- Esquemas Pydantic para Gemini ---
+# --- Esquemas Pydantic para Gemini (Garantizan Estructura del JSON de Salida) ---
 class EvaluacionIndividual(BaseModel):
     id_interno: int
     match_score: int
@@ -21,7 +22,7 @@ class EvaluacionIndividual(BaseModel):
 class RespuestaMatchIA(BaseModel):
     evaluaciones: List[EvaluacionIndividual]
 
-# --- Conexión Nativa a Supabase con Caché ---
+# --- Conexión Nativa a Supabase con Sistema de Caché Optimizado ---
 @st.cache_data(ttl=5, show_spinner="Cargando ofertas del mercado real...")
 def obtener_data_real():
     try:
@@ -41,20 +42,24 @@ def obtener_data_real():
         st.error(f"Error de conexión con la base de datos: {e}")
         return pd.DataFrame()
 
+# Carga e inicialización del DataFrame Global
 df_raw = obtener_data_real()
 
-# --- Interfaz Gráfica ---
 st.title("💼 DataCareer AI")
 tab1, tab2 = st.tabs(["📊 Mercado", "🔍 Evaluador de CV"])
 
 if df_raw.empty:
-    st.warning("⚠️ No hay ofertas disponibles en el repositorio central en este momento.")
+    st.warning("⚠️ No hay ofertas analíticas disponibles en el repositorio central en este momento.")
 else:
+    # ==========================================
+    # PESTAÑA 1: ANALÍTICA DE MERCADO PUREZA DATA/IA
+    # ==========================================
     with tab1:
         st.sidebar.header("⚙️ Filtros")
         filtro_esp = st.sidebar.selectbox("Especialidad", ["Todos"] + sorted(list(df_raw['especialidad'].unique())))
         dias = st.sidebar.slider("Antigüedad (días)", 1, 90, 90)
         
+        # Copia de seguridad lógica para filtros dinámicos
         df_f = df_raw.copy()
         if filtro_esp != "Todos": 
             df_f = df_f[df_f['especialidad'] == filtro_esp]
@@ -63,22 +68,32 @@ else:
         df_f = df_f[df_f['fecha_creacion'] >= limite_tiempo]
         
         if df_f.empty:
-            st.info("No se encontraron vacantes con los filtros seleccionados.")
+            st.info("No se encontraron vacantes analíticas con los filtros seleccionados.")
         else:
             col1, col2 = st.columns(2)
             with col1:
+                st.write("#### Distribución por Jerarquía")
                 st.altair_chart(alt.Chart(df_f['jerarquia'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('jerarquia:N', sort='-x')), use_container_width=True)
+                
+                st.write("#### Hard Skills Demandadas")
                 st.altair_chart(alt.Chart(df_f.explode('hard_skills')['hard_skills'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('hard_skills:N', sort='-x')), use_container_width=True)
             with col2:
+                st.write("#### Demanda por Especialidad")
                 st.altair_chart(alt.Chart(df_f['especialidad'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('especialidad:N', sort='-x')), use_container_width=True)
+                
+                st.write("#### Soft Skills Clave")
                 st.altair_chart(alt.Chart(df_f.explode('soft_skills')['soft_skills'].value_counts().reset_index()).mark_bar().encode(x='count:Q', y=alt.Y('soft_skills:N', sort='-x')), use_container_width=True)
 
+            st.write("#### Ofertas Vigentes Monitoreadas")
             st.dataframe(
                 df_f.drop(columns=['id']).sort_values(by='fecha_creacion', ascending=False), 
                 column_config={"link": st.column_config.LinkColumn("Postular", display_text="Ver oferta")}, 
                 use_container_width=True
             )
 
+    # ==========================================
+    # PESTAÑA 2: EVALUADOR DETERMINISTA RÍGIDO CV
+    # ==========================================
     with tab2:
         archivo = st.file_uploader("Sube tu CV (PDF/TXT)", type=['pdf', 'txt'])
         if archivo:
@@ -105,13 +120,13 @@ else:
                         st.session_state.procesando_cv = True
                         cliente = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
                         
-                       with st.spinner("⚡ Analizando afinidad en tiempo real con IA..."):
-                            # DETERMINISMO 1: Forzar ordenamiento estricto por ID para que el contexto JSON sea idéntico siempre
+                        with st.spinner("⚡ Analizando afinidad en tiempo real con IA..."):
+                            # DETERMINISMO 1: Forzar ordenamiento estricto por ID para consistencia invariante de contexto
                             df_ordenado = df_f.sort_values(by='id', ascending=True)
                             contexto_ia = df_ordenado.head(30)[['id', 'puesto', 'jerarquia', 'hard_skills']].to_json(orient='records')
                             cv_recortado = texto[:1500].replace("\n", " ")
                             
-                            # DETERMINISMO 2: Prompt ultra-estructurado sin ambigüedades interpretativas
+                            # DETERMINISMO 2: Prompt algorítmico libre de ambigüedad interpretativa
                             prompt_blindado = (
                                 f"Eres un algoritmo de emparejamiento matemático frío y determinista. Tu objetivo es emparejar un CV con un catálogo de ofertas de empleo.\n\n"
                                 f"Entrada CV: {cv_recortado}\n"
@@ -131,7 +146,7 @@ else:
                                 config=types.GenerateContentConfig(
                                     response_mime_type="application/json", 
                                     response_schema=RespuestaMatchIA,
-                                    temperature=0.0  # Obliga a elegir la respuesta de máxima probabilidad matemática
+                                    temperature=0.0  # Anula la creatividad de la IA
                                 )
                             )
                             
