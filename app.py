@@ -67,9 +67,6 @@ if "GEMINI_API_KEY" in st.secrets:
 else:
     st.warning("Falta configurar 'GEMINI_API_KEY' en st.secrets.")
 
-# =====================================================================
-# 1.5. PATRÓN SINGLETON PARA CONEXIÓN DE RECURSOS
-# =====================================================================
 @st.cache_resource
 def obtener_cliente_supabase():
     if SUPABASE_AVAILABLE and "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
@@ -79,11 +76,8 @@ def obtener_cliente_supabase():
             return None
     return None
 
-# =====================================================================
-# 2. DEFINICIÓN DE ESQUEMAS ESTRUCTURADOS (PYDANTIC)
-# =====================================================================
 class EvaluacionMatch(BaseModel):
-    match_score: int = Field(..., description="Porcentaje de match real de 0 a 100 basado estrictamente en el cumplimiento de requisitos mínimos y deseables.")
+    match_score: int = Field(..., description="Porcentaje de match real de 0 a 100 basado estrictamente en el cumplimiento de requisitos.")
     justificacion: str = Field(..., description="Explicación analítica clara detallando por qué cumple o no con el perfil.")
     habilidades_coincidentes: list[str] = Field(..., description="Lista de habilidades que el candidato sí posee.")
     habilidades_faltantes: list[str] = Field(..., description="Lista de tecnologías, herramientas o requisitos ausentes en el CV.")
@@ -92,15 +86,14 @@ class EvaluacionMatch(BaseModel):
 # 3. CAPA DE INTELIGENCIA Y PROCESAMIENTO (BACKEND)
 # =====================================================================
 def normalizar_jerarquia(texto):
-    if pd.isna(texto) or texto is None: return "2. Analista / Profesional"
+    if pd.isna(texto) or texto is None: return "3. Analista / Profesional"
     t = str(texto).lower().strip()
     if any(x in t for x in ["practicante", "asistente", "intern", "trainee", "pasantia"]): return "1. Practicante / Asistente"
     if any(x in t for x in ["gerente", "manager", "head", "director", "chief", "cdo", "cto", "ceo"]): return "6. Gerente / Head"
-    if any(x in t for x in ["subgerente", "sub-gerente", "product owner", "po", "scrum"]): return "5. Sub Gerente / P.O."
-    if any(x in t for x in ["lider", "líder", "jefe", "jefatura", "lead", "supervisor"]): return "4. Líder / Jefe"
-    if any(x in t for x in ["senior", "sr", "especialista", "advanced", "ssr"]): return "3. Analista Senior / Especialista"
+    if any(x in t for x in ["lider", "líder", "jefe", "jefatura", "lead", "supervisor"]): return "5. Líder / Jefe"
+    if any(x in t for x in ["senior", "sr", "especialista", "advanced", "ssr"]): return "4. Analista Senior / Especialista"
     if "junior" in t or "jr" in t: return "2. Analista Junior"
-    return "2. Analista / Profesional"
+    return "3. Analista / Profesional"
 
 def pre_ranking_heuristico(df, texto_cv):
     cv_clean = str(texto_cv).lower()
@@ -108,11 +101,11 @@ def pre_ranking_heuristico(df, texto_cv):
     stop_words = {"para", "como", "esta", "este", "todo", "sino", "pero", "experiencia", "conocimiento", "manejo", "perfil"}
     keywords_niveles = {
         "1.": ["practicante", "asistente", "intern", "trainee"],
-        "2.": ["junior", "jr", "analista", "professional"],
-        "3.": ["senior", "sr", "especialista", "advanced", "experto"],
-        "4.": ["lider", "lead", "jefe", "supervisor"],
-        "5.": ["subgerente", "sub-gerente", "product owner"],
-        "6.": ["gerente", "manager", "director", "head", "chief"]
+        "2.": ["junior", "jr"],
+        "3.": ["analista", "professional", "profesional"],
+        "4.": ["senior", "sr", "especialista", "advanced"],
+        "5.": ["lider", "lead", "jefe", "supervisor"],
+        "6.": ["gerente", "manager", "director", "head"]
     }
     
     for _, fila in df.iterrows():
@@ -154,28 +147,34 @@ def extraer_texto_pdf(archivo_pdf):
 def evaluar_cv_contra_vacante(args):
     texto_cv = args["texto_cv"]
     fila_vacante = args["fila_vacante"]
-    model_instance = args["model_instance"]
-    cache_dict = args["cache_dict"]
     cv_hash = args["cv_hash"]
     
-    llave_vacante = f"{fila_vacante.get('titulo', 'SD')}_{fila_vacante.get('empresa', 'SD')}_{fila_vacante.get('link_oferta', 'SD')}"
+    titulo_puesto = fila_vacante.get('titulo')
+    empresa_puesto = fila_vacante.get('empresa') or "Empresa No Especificada"
+    link_puesto = fila_vacante.get('link_oferta')
+    
+    llave_vacante = f"{titulo_puesto}_{empresa_puesto}_{link_puesto}"
     llave_cache = f"{cv_hash}_{llave_vacante}"
     
-    if llave_cache in cache_dict:
-        return cache_dict[llave_cache]
+    if llave_cache in args["cache_dict"]:
+        return args["cache_dict"][llave_cache]
 
     detalles_oferta = f"""
-    Título de la Oferta: {fila_vacante.get('titulo', 'No especificado')}
-    Empresa: {fila_vacante.get('empresa', 'No especificada')}
+    Título de la Oferta: {titulo_puesto}
+    Empresa: {empresa_puesto}
     Especialidad Funcional: {fila_vacante.get('especialidad_objetivo', 'No especificado')}
     Jerarquía Requerida: {fila_vacante.get('jerarquia_limpia', 'No especificada')}
     Descripción Detallada del Puesto: {fila_vacante.get('descripcion', 'No especificada')}
     """
     
     prompt_usuario = f"""
-    Por favor, analiza semánticamente la afinidad del candidato con la vacante descrita.
-    Para el cálculo del `match_score`, sé justo: si el CV demuestra competencias sólidas y alineación de stack o negocio, asígnale un porcentaje de compatibilidad representativo y realista (superando el 70% si existe correlación técnica sólida). 
-    
+    Analiza semánticamente la afinidad del candidato con la vacante descrita.
+    Devuelve estrictamente un objeto JSON que cumpla el formato de la clase EvaluacionMatch:
+    - match_score: entero de 0 a 100.
+    - justificacion: string descriptivo.
+    - habilidades_coincidentes: array de strings.
+    - habilidades_faltantes: array de strings.
+
     VACANTE OBJETIVO:
     {detalles_oferta}
     
@@ -184,9 +183,9 @@ def evaluar_cv_contra_vacante(args):
     """
     
     resultado_base = {
-        "titulo": fila_vacante.get("titulo", "Puesto No Especificado"),
-        "empresa": fila_vacante.get("empresa", "Empresa No Especificada"),
-        "link": fila_vacante.get("link_oferta"),
+        "titulo": titulo_puesto,
+        "empresa": empresa_puesto,
+        "link": link_puesto,
         "jerarquia_evaluada": fila_vacante.get('jerarquia_limpia', 'No clasificada'),
         "match_score": 0,
         "coincidentes": [],
@@ -196,31 +195,34 @@ def evaluar_cv_contra_vacante(args):
     }
     
     try:
+        model_instance = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction="Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA."
+        )
+        
         response = model_instance.generate_content(
             prompt_usuario,
             generation_config=genai.types.GenerationConfig(
-                response_mime_type="application/json", response_schema=EvaluacionMatch, temperature=0.1
+                response_mime_type="application/json", 
+                response_schema=EvaluacionMatch, 
+                temperature=0.1
             )
         )
         
-        texto_limpio = response.text.strip()
-        if texto_limpio.startswith("```json"):
-            texto_limpio = texto_limpio.removeprefix("```json").removesuffix("```").strip()
-            
-        evaluacion = json.loads(texto_limpio)
+        evaluacion = json.loads(response.text.strip())
         resultado_base.update({
             "match_score": int(evaluacion.get("match_score", 0)),
-            "justificacion": evaluacion.get("justificacion", "Análisis completado de forma exitosa."),
+            "justificacion": evaluacion.get("justificacion", "Análisis completado exitosamente."),
             "coincidentes": evaluacion.get("habilidades_coincidentes", []),
             "faltantes": evaluacion.get("habilidades_faltantes", [])
         })
         return resultado_base
         
     except google_exceptions.ResourceExhausted:
-        resultado_base["justificacion"] = "⚠️ Cuota excedida (Rate Limit). Reintentando internamente..."
+        resultado_base["justificacion"] = "⚠️ Cuota excedida (Rate Limit). Inténtalo de nuevo en unos momentos."
         return resultado_base
     except Exception as e:
-        resultado_base["justificacion"] = f"❌ No se pudo completar el análisis automatizado: {str(e)}"
+        resultado_base["justificacion"] = f"❌ Error de parsing en el modelo: {str(e)}"
         return resultado_base
 
 def registrar_telemetria_silenciosa(resultados_analisis):
@@ -252,27 +254,26 @@ def cargar_datos_seguros():
             if respuesta.data and len(respuesta.data) > 0:
                 return pd.DataFrame(respuesta.data)
         except Exception as e:
-            st.sidebar.error(f"Error cargando desde DB de producción: {str(e)}. Activando contingencia.")
+            st.sidebar.error(f"Error cargando DB: {str(e)}. Activando contingencia.")
     
-    # Dataset de contingencia representativo y multiregional para evitar fallos de inicialización
     contingencia = []
     paises_mock = ["Perú", "Colombia", "Chile", "México", "Remoto Latam"]
-    h_skills_mock = [["Python", "SQL", "Machine Learning", "AWS"], ["Power BI", "SQL", "ETL", "DAX"], ["Python", "Spark", "Airflow", "Snowflake"], ["Python", "LLMs", "LangChain"]]
+    h_skills_mock = [["Python", "SQL", "Machine Learning", "AWS"], ["Power BI", "SQL", "ETL", "DAX"], ["Python", "Spark", "Airflow", "Snowflake"]]
     s_skills_mock = [["Liderazgo", "Pensamiento Crítico"], ["Comunicación Asertiva", "Resolución de Problemas"]]
-    empresas_mock = ["BCP", "Interbank", "Rímac", "Alicorp", "Globant", "NTT DATA"]
+    empresas_mock = ["BCP", "Interbank", "Rímac", "Scotiabank", "Globant", "Mindrift"]
     
     titulos_mock = [
-        ("Data Scientist Senior", "Senior", "Data Science"),
-        ("Analista de Business Intelligence", "Analista", "Business Intelligence"),
-        ("Data Engineer Advanced", "Senior", "Data Engineering"),
-        ("AI Software Engineer", "Analista", "Artificial Intelligence"),
-        ("Gerente de Analítica de Datos", "Gerente", "Data Management"),
-        ("Practicante de Inteligencia Comercial", "Practicante", "Business Intelligence"),
-        ("Jefe de Gobierno de Datos", "Jefe", "Data Management")
+        ("Data Scientist", "Analista Senior / Especialista", "Data Science"),
+        ("Analista de BI", "Analista / Profesional", "Business Intelligence"),
+        ("Data Engineer", "Analista Senior / Especialista", "Data Engineering"),
+        ("AI Software Engineer", "Analista Junior", "Artificial Intelligence"),
+        ("Gerente de Analítica", "Gerente / Head", "Data Management"),
+        ("Líder de Business Intelligence", "Líder / Jefe", "Business Intelligence"),
+        ("Data Analyst", "Analista / Profesional", "Data Analytics"),
+        ("Asistente de Datos e IA", "Practicante / Asistente", "Artificial Intelligence")
     ]
     
-    # Generamos un set de contingencia robusto para garantizar que los filtros siempre tengan contenido
-    for i in range(45):
+    for i in range(100):
         t, j, e = titulos_mock[i % len(titulos_mock)]
         p = paises_mock[i % len(paises_mock)]
         emp = empresas_mock[i % len(empresas_mock)]
@@ -285,37 +286,32 @@ def cargar_datos_seguros():
             "jerarquia": j,
             "especialidad_objetivo": e,
             "pais": p,
-            "descripcion": f"Requerimos profesionales con dominio estructurado en {', '.join(hs)}. Enfoque en analítica avanzada y {', '.join(ss)}.",
-            "link_oferta": f"[https://www.linkedin.com/jobs/view/mock-](https://www.linkedin.com/jobs/view/mock-){i+100}",
+            "descripcion": f"Requerimos profesionales con dominio estructurado en {', '.join(hs)}. Enfoque en {e}.",
+            "link_oferta": f"https://www.linkedin.com/jobs/view/mock-{i+100}",
             "hard_skills": hs,
             "soft_skills": ss
         })
     return pd.DataFrame(contingencia)
 
 # =====================================================================
-# 5. FUNCIÓN PRINCIPAL DE LA APLICACIÓN (CORRECCIÓN RUNTIME ENTRY POINT)
+# 5. FUNCIÓN PRINCIPAL DE LA APLICACIÓN
 # =====================================================================
 def main():
     df_raw = cargar_datos_seguros()
     df_vacantes = df_raw.copy()
 
-    # Sanitización garantizada de datos estructurados de entrada
-    columnas_defecto = {
-        'titulo': 'Puesto No Especificado', 'empresa': 'Empresa No Especificada',
-        'pais': 'Perú', 'jerarquia': 'Analista / Profesional',
-        'especialidad_objetivo': 'Data & Analytics', 'descripcion': 'Sin descripción.',
-        'link_oferta': None, 'hard_skills': [], 'soft_skills': []
-    }
-    for col, valor in columnas_defecto.items():
-        if col not in df_vacantes.columns:
-            df_vacantes[col] = valor
+    # Sanitización estricta para evitar "Puesto No Especificado" bajo cualquier circunstancia
+    def limpiar_titulo(row):
+        t = str(row.get('titulo', '')).strip()
+        if not t or t.lower() in ['nan', 'none', 'puesto no especificado', '']:
+            return f"Especialista en {row.get('especialidad_objetivo', 'Analítica de Datos')}"
+        return t
 
+    df_vacantes['titulo'] = df_vacantes.apply(limpiar_titulo, axis=1)
     df_vacantes['pais'] = df_vacantes['pais'].fillna('Remoto Latam').astype(str).str.title()
     df_vacantes['jerarquia_limpia'] = df_vacantes['jerarquia'].apply(normalizar_jerarquia)
 
-    # -----------------------------------------------------------------
-    # CONTROL DE CONTENIDOS - PANEL LATERAL (SIDEBAR DE FILTROS GLOBALES)
-    # -----------------------------------------------------------------
+    # Panel lateral (Sidebar)
     st.sidebar.header("🎯 Filtros del Mercado")
 
     lista_paises = sorted(list(df_vacantes['pais'].unique()))
@@ -328,184 +324,155 @@ def main():
     especialidades_seleccionadas = st.sidebar.multiselect("Especialidad Funcional", options=lista_especialidades, default=lista_especialidades)
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("⚙️ Gestión de Sesión")
-    if st.sidebar.button("🧹 Limpiar Caché y Resultados", use_container_width=True):
+    if st.sidebar.button("🧹 Limpiar Caché", use_container_width=True):
         st.session_state["ats_cache"] = {}
         st.session_state["texto_cv_usuario"] = ""
         st.cache_data.clear()
-        st.success("Caché liberada correctamente.")
         st.rerun()
 
-    # Aplicación estricta de filtros sobre el set de datos en tiempo real
     df_filtrado = df_vacantes[
         (df_vacantes['pais'].isin(paises_seleccionados)) & 
         (df_vacantes['jerarquia_limpia'].isin(jerarquias_seleccionadas)) &
         (df_vacantes['especialidad_objetivo'].isin(especialidades_seleccionadas))
     ].reset_index(drop=True)
 
-    # Encabezado UI principal
     st.markdown("<h1 class='main-title'>💼 DataCareer AI</h1>", unsafe_allow_html=True)
-    st.write("Ecosistema de inteligencia de talento para la evaluación de compatibilidad laboral en tiempo real.")
-
+    
     col1, col2, col3 = st.columns(3)
     col1.metric("Ofertas Vigentes Filtradas", len(df_filtrado))
-    col2.metric("Última Sincronización del Pipeline", "19/06/2026 13:00")
-    col3.metric("Origen de Datos Activo", "Supabase DB" if (obtener_cliente_supabase() is not None) else "Simulado / Contingencia")
+    col2.metric("Última Sincronización", "19/06/2026 13:40")
+    col3.metric("Origen Activo", "Supabase DB" if (obtener_cliente_supabase() is not None) else "Simulado / Contingencia")
 
-    tab_mercado, tab_evaluador = st.tabs(["📊 Tablero Analítico del Mercado", "🔍 Evaluador ATS de CV"])
+    tab_mercado, tab_evaluador = st.tabs(["📊 Tablero Analítico", "🔍 Evaluador ATS de CV"])
 
-    # -----------------------------------------------------------------
-    # TAB 1: LOS 4 GRÁFICOS OBLIGATORIOS (ALTAIR CON DETECCIÓN EXPLODE Y SORT)
-    # -----------------------------------------------------------------
     with tab_mercado:
         st.subheader("Análisis de Demanda Real y Competencias Clave")
-        
         if not df_filtrado.empty:
-            # Grid balanceado 2x2 para evitar vistas aplanadas o asimétricas
             c1, c2 = st.columns(2)
-            
             with c1:
                 st.markdown("#### **Distribución por Jerarquías Requeridas**")
                 g1 = alt.Chart(df_filtrado).mark_bar(color='#1e3a8a').encode(
-                    x=alt.X('jerarquia_limpia:N', sort='-y', title="Nivel de Seniority"),
-                    y=alt.Y('count():Q', title="Volumen de Vacantes")
+                    x=alt.X('jerarquia_limpia:N', sort='x', axis=alt.Axis(labelAngle=-45, labelFontSize=10), title="Seniority"),
+                    y=alt.Y('count():Q', title="Vacantes"),
+                    tooltip=['jerarquia_limpia', 'count()']
                 ).properties(height=280)
                 st.altair_chart(g1, use_container_width=True)
 
-                # Procesamiento mediante .explode() para mapeo de Hard Skills individuales
                 st.markdown("#### **Top Hard Skills más Demandadas**")
                 df_hard = df_filtrado.explode('hard_skills')
                 df_hard = df_hard[df_hard['hard_skills'].astype(str).str.len() > 0]
-                
                 if not df_hard.empty:
                     g3 = alt.Chart(df_hard).mark_bar(color='#2ecc71').encode(
-                        x=alt.X('hard_skills:N', sort='-y', title="Tecnologías / Herramientas"),
-                        y=alt.Y('count():Q', title="Frecuencia de Aparición")
+                        x=alt.X('hard_skills:N', sort='-y', axis=alt.Axis(labelAngle=-45, labelFontSize=10), title="Herramientas"),
+                        y=alt.Y('count():Q', title="Apariciones"),
+                        tooltip=['hard_skills', 'count()']
                     ).properties(height=280)
                     st.altair_chart(g3, use_container_width=True)
-                else:
-                    st.info("Sin registros de Hard Skills en este segmento.")
 
             with c2:
                 st.markdown("#### **Demanda por Especialidad Funcional**")
                 g2 = alt.Chart(df_filtrado).mark_bar(color='#f39c12').encode(
-                    x=alt.X('especialidad_objetivo:N', sort='-y', title="Especialidad"),
-                    y=alt.Y('count():Q', title="Volumen de Vacantes")
+                    x=alt.X('especialidad_objetivo:N', sort='-y', axis=alt.Axis(labelAngle=-45, labelFontSize=10), title="Especialidad"),
+                    y=alt.Y('count():Q', title="Vacantes"),
+                    tooltip=['especialidad_objetivo', 'count()']
                 ).properties(height=280)
                 st.altair_chart(g2, use_container_width=True)
 
-                # Procesamiento mediante .explode() para mapeo de Soft Skills individuales
                 st.markdown("#### **Top Soft Skills Requeridas**")
                 df_soft = df_filtrado.explode('soft_skills')
                 df_soft = df_soft[df_soft['soft_skills'].astype(str).str.len() > 0]
-                
                 if not df_soft.empty:
                     g4 = alt.Chart(df_soft).mark_bar(color='#9b59b6').encode(
-                        x=alt.X('soft_skills:N', sort='-y', title="Competencias Blandas"),
-                        y=alt.Y('count():Q', title="Frecuencia de Aparición")
+                        x=alt.X('soft_skills:N', sort='-y', axis=alt.Axis(labelAngle=-45, labelFontSize=10), title="Competencias"),
+                        y=alt.Y('count():Q', title="Apariciones"),
+                        tooltip=['soft_skills', 'count()']
                     ).properties(height=280)
                     st.altair_chart(g4, use_container_width=True)
-                else:
-                    st.info("Sin registros de Soft Skills en este segmento.")
 
             st.markdown("---")
             st.markdown("#### **Explorador Detallado de Ofertas Laborales**")
-            st.dataframe(df_filtrado[['titulo', 'empresa', 'pais', 'jerarquia_limpia', 'especialidad_objetivo']], use_container_width=True)
-        else:
-            st.info("No hay registros que coincidan con los filtros seleccionados.")
+            
+            st.dataframe(
+                df_filtrado[['titulo', 'empresa', 'pais', 'jerarquia_limpia', 'especialidad_objetivo', 'link_oferta']],
+                column_config={
+                    "titulo": st.column_config.TextColumn("Puesto Disponible"),
+                    "empresa": st.column_config.TextColumn("Organización"),
+                    "link_oferta": st.column_config.LinkColumn("Enlace Postulación", display_text="🎯 Ver Vacante en LinkedIn")
+                },
+                use_container_width=True,
+                hide_index=True
+            )
 
-    # -----------------------------------------------------------------
-    # TAB 2: EVALUADOR ATS OPTIMIZADO
-    # -----------------------------------------------------------------
     with tab_evaluador:
         st.subheader("🤖 Escáner de Compatibilidad ATS por Inteligencia Artificial")
-        
-        archivo_subido = st.file_uploader("Sube tu Currículum Vitae en formato PDF:", type=["pdf"])
+        archivo_subido = st.file_uploader("Sube tu CV en formato PDF:", type=["pdf"])
         
         if archivo_subido is not None:
-            with st.spinner("Lectura e indexación estructural del PDF..."):
-                st.session_state["texto_cv_usuario"] = extraer_texto_pdf(archivo_subido)
-            
+            st.session_state["texto_cv_usuario"] = extraer_texto_pdf(archivo_subido)
             if st.session_state["texto_cv_usuario"]:
                 st.success("¡Texto extraído del documento exitosamente!")
-                with st.expander("👁️ Ver contenido extraído del CV"):
-                    st.text(st.session_state["texto_cv_usuario"])
 
         if st.button("🚀 Ejecutar Match Inteligente"):
             if not st.session_state["texto_cv_usuario"].strip():
-                st.error("Por favor, sube un archivo PDF válido antes de ejecutar el análisis.")
+                st.error("Sube un archivo PDF válido primero.")
             elif df_vacantes.empty:
-                st.error("La base de datos de origen está vacía.")
+                st.error("No hay base de datos cargada.")
             else:
                 df_analizar = df_filtrado if not df_filtrado.empty else df_vacantes
                 cv_hash = hashlib.md5(st.session_state["texto_cv_usuario"].encode('utf-8')).hexdigest()
                 
                 MAX_LLM_CALLS = 10
                 if len(df_analizar) > MAX_LLM_CALLS:
-                    with st.spinner("Realizando pre-ranking de relevancia estadística..."):
-                        df_analizar = pre_ranking_heuristico(df_analizar, st.session_state["texto_cv_usuario"]).head(MAX_LLM_CALLS)
-                    st.info(f"💡 Evaluando semánticamente el Top {MAX_LLM_CALLS} de vacantes con mayor afinidad estadística preliminar.")
-                    
-                with st.spinner("Procesando comparación analítica ATS con Gemini 1.5 Flash..."):
-                    prompt_sistema = "Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA. Evalúas con alto rigor y especificidad técnica."
-                    shared_model = genai.GenerativeModel(model_name="gemini-1.5-flash", system_instruction=prompt_sistema)
-                    
-                    payloads = [
-                        {
-                            "texto_cv": st.session_state["texto_cv_usuario"],
-                            "fila_vacante": fila,
-                            "model_instance": shared_model,
-                            "cache_dict": st.session_state["ats_cache"],
-                            "cv_hash": cv_hash
-                        }
-                        for _, fila in df_analizar.iterrows()
-                    ]
-                    
-                    with ThreadPoolExecutor(max_workers=5) as executor:
+                    df_analizar = pre_ranking_heuristico(df_analizar, st.session_state["texto_cv_usuario"]).head(MAX_LLM_CALLS)
+                
+                payloads = [
+                    {
+                        "texto_cv": st.session_state["texto_cv_usuario"],
+                        "fila_vacante": fila,
+                        "cache_dict": st.session_state["ats_cache"],
+                        "cv_hash": cv_hash
+                    }
+                    for _, fila in df_analizar.iterrows()
+                ]
+                
+                with st.spinner("Comparando analítica ATS con Gemini..."):
+                    with ThreadPoolExecutor(max_workers=4) as executor:
                         resultados_analisis = list(executor.map(evaluar_cv_contra_vacante, payloads))
-                    
-                    for res in resultados_analisis:
-                        if "llave_cache" in res and res.get("match_score", 0) > 0:
-                            st.session_state["ats_cache"][res["llave_cache"]] = res
+                
+                for res in resultados_analisis:
+                    if "llave_cache" in res and res.get("match_score", 0) > 0:
+                        st.session_state["ats_cache"][res["llave_cache"]] = res
 
                 threading.Thread(target=registrar_telemetria_silenciosa, args=(resultados_analisis,), daemon=True).start()
                 
-                df_resultados = pd.DataFrame(resultados_analisis).sort_values(by="match_score", ascending=False).reset_index(drop=True)
+                # Modificación: Ordenamiento explícito restringido al Top 10 Real de Match
+                df_resultados = pd.DataFrame(resultados_analisis).sort_values(by="match_score", ascending=False).head(10).reset_index(drop=True)
+                
                 st.success("¡Análisis de compatibilidad finalizado!")
                 
-                # Renderizado dinámico de tarjetas profesionales de correspondencia (Match Cards)
                 for idx, res in df_resultados.iterrows():
                     score = res["match_score"]
                     color_badge = "#2ecc71" if score >= 70 else ("#f39c12" if score >= 45 else "#e74c3c")
-                    
-                    coincide_list = res.get('coincidentes', [])
-                    falta_list = res.get('faltantes', [])
-                    
-                    s_coincidentes = ', '.join(coincide_list) if coincide_list else 'Ninguna detectada explícitamente.'
-                    s_faltantes = ', '.join(falta_list) if falta_list else 'Ninguna brecha crítica detectada.'
-                    
-                    link_html = ""
-                    if res.get("link"):
-                        link_html = f'<a href="{res["link"]}" target="_blank" class="action-link">🎯 Ver Vacante Activa en {res["empresa"]}</a>'
+                    link_html = f'<a href="{res["link"]}" target="_blank" class="action-link">🎯 Ver Vacante Activa en {res["empresa"]}</a>' if res.get("link") else ""
                     
                     st.markdown(f"""
                     <div class="match-card">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #f1f5f9; padding-bottom: 10px;">
                             <h4 style="margin: 0; color: #1e3a8a; font-size: 1.25em;">
-                                {res.get('titulo', 'Puesto No Especificado')} <span style="color: #6b7280; font-size: 0.85em; font-weight: normal;">({res.get('empresa', 'Empresa No Especificada')})</span>
+                                {res.get('titulo')} <span style="color: #6b7280; font-size: 0.85em; font-weight: normal;">({res.get('empresa')})</span>
                             </h4>
                             <span style="background-color: {color_badge}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.9em; white-space: nowrap;">
                                 {score}% Match
                             </span>
                         </div>
                         <div style="margin-bottom: 12px; color: #334155; font-size: 0.95em; line-height: 1.5;">
-                            <strong style="color: #0f172a;">Análisis Estratégico ATS:</strong> {res.get('justificacion', 'Sin justificación disponible.')}
+                            <strong>Análisis Estratégico ATS:</strong> {res.get('justificacion')}
                         </div>
                         <div style="margin-bottom: 8px; font-size: 0.9em; color: #16a34a;">
-                            <strong>✓ Habilidades Coincidentes:</strong> {s_coincidentes}
+                            <strong>✓ Habilidades Coincidentes:</strong> {', '.join(res.get('coincidentes', [])) if res.get('coincidentes') else 'Ninguna detectada explícitamente.'}
                         </div>
                         <div style="margin-bottom: 12px; font-size: 0.9em; color: #dc2626;">
-                            <strong>✗ Brechas Técnicas Detectadas:</strong> {s_faltantes}
+                            <strong>✗ Brechas Técnicas:</strong> {', '.join(res.get('faltantes', [])) if res.get('faltantes') else 'Ninguna brecha crítica detectada.'}
                         </div>
                         {link_html}
                     </div>
