@@ -300,7 +300,40 @@ def main():
     df_raw = cargar_datos_seguros()
     df_vacantes = df_raw.copy()
 
-    # Sanitización estricta para evitar "Puesto No Especificado" bajo cualquier circunstancia
+  # =====================================================================
+# 5. FUNCIÓN PRINCIPAL DE LA APLICACIÓN
+# =====================================================================
+def main():
+    df_raw = cargar_datos_seguros()
+    df_vacantes = df_raw.copy()
+
+    # =====================================================================
+    # CAPA DE HOMOLOGACIÓN: Mapear DB real a la estructura de la App
+    # =====================================================================
+    mapeo_columnas = {
+        'puesto': 'titulo',
+        'especialidad': 'especialidad_objetivo',
+        'link': 'link_oferta'
+    }
+    df_vacantes = df_vacantes.rename(columns=mapeo_columnas)
+
+    # Inyectamos de forma segura las columnas que NO existen en la tabla SQL
+    columnas_faltantes_defecto = {
+        'pais': 'Remoto Latam',
+        'titulo': 'Puesto No Especificado',
+        'empresa': 'Empresa No Especificada',
+        'jerarquia': 'Analista / Profesional',
+        'especialidad_objetivo': 'Analítica de Datos',
+        'link_oferta': ''
+    }
+
+    for col, valor_defecto in columnas_faltantes_defecto.items():
+        if col not in df_vacantes.columns:
+            df_vacantes[col] = valor_defecto
+        else:
+            df_vacantes[col] = df_vacantes[col].fillna(valor_defecto)
+
+    # Sanitización estricta del título
     def limpiar_titulo(row):
         t = str(row.get('titulo', '')).strip()
         if not t or t.lower() in ['nan', 'none', 'puesto no especificado', '']:
@@ -308,7 +341,7 @@ def main():
         return t
 
     df_vacantes['titulo'] = df_vacantes.apply(limpiar_titulo, axis=1)
-    df_vacantes['pais'] = df_vacantes['pais'].fillna('Remoto Latam').astype(str).str.title()
+    df_vacantes['pais'] = df_vacantes['pais'].astype(str).str.title()
     df_vacantes['jerarquia_limpia'] = df_vacantes['jerarquia'].apply(normalizar_jerarquia)
 
     # Panel lateral (Sidebar)
