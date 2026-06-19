@@ -43,7 +43,8 @@ def generar_mock_ofertas_representativas():
     pool_soft_skills = ["Comunicación Asertiva", "Liderazgo", "Resolución de Problemas", "Trabajo en Equipo", "Pensamiento Crítico", "Negociación"]
     
     ofertas = []
-    for i in range(165):
+    # CORRECCIÓN: Elevado a 200 para superar el umbral de 180 requerido
+    for i in range(200):
         esp = random.choice(especialidades)
         rol = random.choice(roles) if esp != "Business Intelligence" else "Analista de BI"
         nivel = random.choice(jerarquias)
@@ -79,12 +80,13 @@ def cargar_vacantes_a_supabase():
     exitos = 0
     for oferta in ofertas:
         try:
-            supabase.table("vacantes").upsert(oferta).execute()
+            # CORRECCIÓN: .insert() en lugar de .upsert() para evitar fallos por ausencia de ID único explícito
+            supabase.table("vacantes").insert(oferta).execute()
             exitos += 1
         except Exception as e:
             print(f"Error insertando oferta: {str(e)}")
             
-    print(f"Procesamiento finalizado. {exitos} registros actualizados.")
+    print(f"Procesamiento finalizado. {exitos} registros nuevos indexados.")
 
 if __name__ == "__main__":
     cargar_vacantes_a_supabase()
