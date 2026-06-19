@@ -53,7 +53,7 @@ def generar_mock_ofertas_representativas():
     return ofertas
 
 def cargar_vacantes_a_supabase():
-    if TU_SUPABASE_URL == "TU_SUPABASE_URL":
+    if SUPABASE_URL == "TU_SUPABASE_URL":
         print("⚠️ Configura las variables de entorno de Supabase.")
         return
         
