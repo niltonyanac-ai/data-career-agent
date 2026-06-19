@@ -1,23 +1,104 @@
-import streamlit as st
-import pandas as pd
+import os
 import json
+import random
 import hashlib
 import threading
+import pandas as pd
 import altair as alt
+from concurrent.futures import ThreadPoolExecutor
+from pydantic import BaseModel, Field
+from pypdf import PdfReader
+from supabase import create_client, Client
+import streamlit as st
 import google.generativeai as genai
 import google.api_core.exceptions as google_exceptions
-from pydantic import BaseModel, Field
-from concurrent.futures import ThreadPoolExecutor
-from pypdf import PdfReader
-
-try:
-    from supabase import create_client, Client
-    SUPABASE_AVAILABLE = True
-except ImportError:
-    SUPABASE_AVAILABLE = False
 
 # =====================================================================
-# 1. CONFIGURACIÓN DE LA PÁGINA Y ESTILOS
+# 1. CONFIGURACIÓN DE VARIABLES DE ENTORNO Y SUPABASE (BACKEND)
+# =====================================================================
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "TU_SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "TU_SUPABASE_KEY")
+
+def generar_mock_ofertas_representativas():
+    """Genera una muestra estadística robusta de vacantes estructuradas en Data, BI e IA"""
+    roles = ["Data Scientist", "Analista de BI", "Data Engineer", "AI Engineer", "Gerente de Analítica", "Data Analyst"]
+    empresas = ["BCP", "Interbank", "Rímac", "Alicorp", "Belcorp", "Inetum", "NTT DATA", "Globant", "Scotiabank", "Mindrift"]
+    paises = ["Perú", "Colombia", "Chile", "México", "Remoto Latam"]
+    
+    jerarquias = [
+        "Practicante / Asistente", 
+        "Analista Junior", 
+        "Analista / Profesional", 
+        "Analista Senior / Especialista", 
+        "Líder / Jefe", 
+        "Gerente / Head"
+    ]
+    
+    especialidades = [
+        "Data Science", 
+        "Business Intelligence", 
+        "Data Engineering", 
+        "Artificial Intelligence", 
+        "Data Management",
+        "Data Analytics"
+    ]
+    
+    pool_hard_skills = {
+        "Data Science": ["Python", "R", "Machine Learning", "Scikit-Learn", "SQL", "AWS", "Docker"],
+        "Business Intelligence": ["Power BI", "SQL", "Tableau", "ETL", "Excel", "Data Warehouse", "DAX"],
+        "Data Engineering": ["Python", "SQL", "Spark", "Airflow", "Snowflake", "Databricks", "AWS", "Azure"],
+        "Artificial Intelligence": ["Python", "PyTorch", "TensorFlow", "LLMs", "LangChain", "OpenAI API", "NLP"],
+        "Data Management": ["Gobierno de Datos", "Data Quality", "SQL", "Collibra", "Scrum", "KPIs"],
+        "Data Analytics": ["Python", "SQL", "Excel", "Estadística Inferencial", "A/B Testing", "Mixpanel"]
+    }
+    
+    pool_soft_skills = ["Comunicación Asertiva", "Liderazgo", "Resolución de Problemas", "Trabajo en Equipo", "Pensamiento Crítico", "Negociación"]
+    
+    ofertas = []
+    for i in range(200):
+        esp = random.choice(especialidades)
+        rol = random.choice(roles) if esp != "Business Intelligence" else "Analista de BI"
+        nivel = random.choice(jerarquias)
+        titulo = f"{rol} ({nivel})"
+        
+        h_skills = random.sample(pool_hard_skills[esp], k=min(4, len(pool_hard_skills[esp])))
+        s_skills = random.sample(pool_soft_skills, k=3)
+        emp = random.choice(empresas)
+        pais = random.choice(paises)
+        
+        ofertas.append({
+            "link_oferta": f"https://www.linkedin.com/jobs/view/simulado-{i+1000}",
+            "titulo": titulo,
+            "empresa": emp,
+            "pais": pais,
+            "jerarquia": nivel,
+            "especialidad_objetivo": esp,
+            "descripcion": f"Buscamos un {titulo} para unirse al equipo de {emp} en {pais}. Requisitos clave: {', '.join(h_skills)}. Capacidad de {', '.join(s_skills)}.",
+            "hard_skills": h_skills,
+            "soft_skills": s_skills
+        })
+    return ofertas
+
+def cargar_vacantes_a_supabase():
+    if SUPABASE_URL == "TU_SUPABASE_URL":
+        print("⚠️ Configura las variables de entorno de Supabase.")
+        return
+        
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    ofertas = generar_mock_ofertas_representativas()
+    
+    print(f"Iniciando carga masiva de {len(ofertas)} ofertas indexadas...")
+    try:
+        # EFICIENCIA MÁXIMA: Insertamos toda la lista en un único viaje de red
+        # Nota: Asegúrate de que tu tabla en Supabase tenga auto-incremento o UUID en su llave primaria.
+        respuesta = supabase.table("vacantes").insert(ofertas).execute()
+        print(f"¡Procesamiento finalizado con éxito! {len(respuesta.data)} registros nuevos indexados de golpe.")
+    except Exception as e:
+        print(f"❌ Fallo crítico en la inserción masiva: {str(e)}")
+
+
+# =====================================================================
+# 2. CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT Y ESTILOS UI
 # =====================================================================
 st.set_page_config(
     page_title="DataCareer AI",
@@ -69,7 +150,7 @@ else:
 
 @st.cache_resource
 def obtener_cliente_supabase():
-    if SUPABASE_AVAILABLE and "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
+    if "SUPABASE_URL" in st.secrets and "SUPABASE_KEY" in st.secrets:
         try:
             return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
         except Exception:
@@ -82,26 +163,52 @@ class EvaluacionMatch(BaseModel):
     habilidades_coincidentes: list[str] = Field(..., description="Lista de habilidades que el candidato sí posee.")
     habilidades_faltantes: list[str] = Field(..., description="Lista de tecnologías, herramientas o requisitos ausentes en el CV.")
 
+
 # =====================================================================
-# 3. CAPA DE INTELIGENCIA Y PROCESAMIENTO (BACKEND)
+# 3. CAPA DE INTELIGENCIA Y PROCESAMIENTO (BACKEND DEL APLICATIVO)
 # =====================================================================
 def normalizar_jerarquia(texto):
-    if pd.isna(texto) or texto is None: return "3. Analista / Profesional"
+    if pd.isna(texto) or texto is None: 
+        return "3. Analista / Profesional"
     t = str(texto).lower().strip()
-    if any(x in t for x in ["practicante", "asistente", "intern", "trainee", "pasantia"]): return "1. Practicante / Asistente"
-    if any(x in t for x in ["gerente", "manager", "head", "director", "chief", "cdo", "cto", "ceo"]): return "6. Gerente / Head"
-    if any(x in t for x in ["lider", "líder", "jefe", "jefatura", "lead", "supervisor"]): return "5. Líder / Jefe"
-    if any(x in t for x in ["senior", "sr", "especialista", "advanced", "ssr"]): return "4. Analista Senior / Especialista"
-    if "junior" in t or "jr" in t: return "2. Analista Junior"
+    if any(x in t for x in ["practicante", "intern", "trainee", "pasantia", "becario", "pre profesional", "pro profesional"]): 
+        return "1. Practicante / Trainee"
+    if any(x in t for x in ["gerente", "manager", "head", "director", "chief", "cdo", "cto", "ceo", "vpe", "liderazgo ejecutivo"]): 
+        return "6. Gerente / Head"
+    if any(x in t for x in ["lider", "líder", "jefe", "jefatura", "lead", "supervisor", "coordinador"]): 
+        return "5. Líder / Jefe"
+    if any(x in t for x in ["senior", "sr", "especialista", "advanced", "ssr", "expert"]): 
+        return "4. Analista Senior / Especialista"
+    if any(x in t for x in ["junior", "jr", "asistente", "auxiliar", "entry level"]): 
+        return "2. Analista Junior"
     return "3. Analista / Profesional"
+
+def inferir_pais_por_datos(row):
+    """Deducción heurística respetando la metadata nativa existente"""
+    if pd.notna(row.get('pais')) and str(row.get('pais')).strip() != '' and str(row.get('pais')).lower() != 'nan':
+        return str(row.get('pais')).strip()
+
+    link = str(row.get('link_oferta', '')).lower()
+    puesto = str(row.get('titulo', '')).lower()
+    empresa = str(row.get('empresa', '')).lower()
+    
+    if any(k in link for k in ['.pe', 'peru']) or 'perú' in puesto or 'peru' in puesto or 'perú' in empresa:
+        return 'Perú'
+    if any(k in link for k in ['.cl', 'chile']) or 'chile' in puesto or 'chile' in empresa:
+        return 'Chile'
+    if any(k in link for k in ['.co', 'colombia']) or 'colombia' in puesto or 'colombia' in empresa:
+        return 'Colombia'
+    if any(k in link for k in ['.ec', 'ecuador']) or 'ecuador' in puesto or 'ecuador' in empresa:
+        return 'Ecuador'
+    return 'Remoto Latam'
 
 def pre_ranking_heuristico(df, texto_cv):
     cv_clean = str(texto_cv).lower()
     scores = []
     stop_words = {"para", "como", "esta", "este", "todo", "sino", "pero", "experiencia", "conocimiento", "manejo", "perfil"}
     keywords_niveles = {
-        "1.": ["practicante", "asistente", "intern", "trainee"],
-        "2.": ["junior", "jr"],
+        "1.": ["practicante", "intern", "trainee"],
+        "2.": ["junior", "jr", "asistente"],
         "3.": ["analista", "professional", "profesional"],
         "4.": ["senior", "sr", "especialista", "advanced"],
         "5.": ["lider", "lead", "jefe", "supervisor"],
@@ -209,12 +316,18 @@ def evaluar_cv_contra_vacante(args):
             )
         )
         
-        evaluacion = json.loads(response.text.strip())
+        texto_limpio = response.text.strip()
+        if texto_limpio.startswith("```json"):
+            texto_limpio = texto_limpio.split("```json")[1].split("```")[0].strip()
+        elif texto_limpio.startswith("```"):
+            texto_limpio = texto_limpio.split("```")[1].split("```")[0].strip()
+
+        evaluacion = json.loads(texto_limpio)
         resultado_base.update({
             "match_score": int(evaluacion.get("match_score", 0)),
             "justificacion": evaluacion.get("justificacion", "Análisis completado exitosamente."),
-            "coincidentes": evaluacion.get("habilidades_coincidentes", []),
-            "faltantes": evaluacion.get("habilidades_faltantes", [])
+            "coincidentes": evaluacion.get("habilidades_coincidentes", evaluacion.get("coincidentes", [])),
+            "faltantes": evaluacion.get("habilidades_faltantes", evaluacion.get("faltantes", []))
         })
         return resultado_base
         
@@ -242,8 +355,9 @@ def registrar_telemetria_silenciosa(resultados_analisis):
     except Exception:
         pass
 
+
 # =====================================================================
-# 4. FLUJO DE CARGA Y CONEXIÓN DE DATOS (MUESTRA ESTADÍSTICA ROBUSTA)
+# 4. FLUJO DE CONEXIÓN DE DATOS Y CONTINGENCIA LOCAL
 # =====================================================================
 @st.cache_data(ttl=600)
 def cargar_datos_seguros():
@@ -270,10 +384,10 @@ def cargar_datos_seguros():
         ("Gerente de Analítica", "Gerente / Head", "Data Management"),
         ("Líder de Business Intelligence", "Líder / Jefe", "Business Intelligence"),
         ("Data Analyst", "Analista / Profesional", "Data Analytics"),
-        ("Asistente de Datos e IA", "Practicante / Asistente", "Artificial Intelligence")
+        ("Asistente de Datos e IA", "Practicante / Trainee", "Artificial Intelligence")
     ]
     
-    for i in range(100):
+    for i in range(200):
         t, j, e = titulos_mock[i % len(titulos_mock)]
         p = paises_mock[i % len(paises_mock)]
         emp = empresas_mock[i % len(empresas_mock)]
@@ -293,23 +407,14 @@ def cargar_datos_seguros():
         })
     return pd.DataFrame(contingencia)
 
+
 # =====================================================================
-# 5. FUNCIÓN PRINCIPAL DE LA APLICACIÓN
+# 5. FUNCIÓN PRINCIPAL DE LA APLICACIÓN (FRONTEND & UX)
 # =====================================================================
 def main():
     df_raw = cargar_datos_seguros()
     df_vacantes = df_raw.copy()
 
-  # =====================================================================
-# 5. FUNCIÓN PRINCIPAL DE LA APLICACIÓN
-# =====================================================================
-def main():
-    df_raw = cargar_datos_seguros()
-    df_vacantes = df_raw.copy()
-
-    # =====================================================================
-    # CAPA DE HOMOLOGACIÓN: Mapear DB real a la estructura de la App
-    # =====================================================================
     mapeo_columnas = {
         'puesto': 'titulo',
         'especialidad': 'especialidad_objetivo',
@@ -317,9 +422,7 @@ def main():
     }
     df_vacantes = df_vacantes.rename(columns=mapeo_columnas)
 
-    # Inyectamos de forma segura las columnas que NO existen en la tabla SQL
     columnas_faltantes_defecto = {
-        'pais': 'Remoto Latam',
         'titulo': 'Puesto No Especificado',
         'empresa': 'Empresa No Especificada',
         'jerarquia': 'Analista / Profesional',
@@ -333,7 +436,6 @@ def main():
         else:
             df_vacantes[col] = df_vacantes[col].fillna(valor_defecto)
 
-    # Sanitización estricta del título
     def limpiar_titulo(row):
         t = str(row.get('titulo', '')).strip()
         if not t or t.lower() in ['nan', 'none', 'puesto no especificado', '']:
@@ -341,8 +443,17 @@ def main():
         return t
 
     df_vacantes['titulo'] = df_vacantes.apply(limpiar_titulo, axis=1)
-    df_vacantes['pais'] = df_vacantes['pais'].astype(str).str.title()
+    df_vacantes['pais'] = df_vacantes.apply(inferir_pais_por_datos, axis=1)
     df_vacantes['jerarquia_limpia'] = df_vacantes['jerarquia'].apply(normalizar_jerarquia)
+
+    if 'descripcion' not in df_vacantes.columns or df_vacantes['descripcion'].isna().all():
+        def generar_descripcion_sintetica(row):
+            hs = row.get('hard_skills', [])
+            ss = row.get('soft_skills', [])
+            hs_str = ", ".join(hs) if isinstance(hs, list) else str(hs)
+            ss_str = ", ".join(ss) if isinstance(ss, list) else str(ss)
+            return f"Búsqueda activa de {row.get('titulo')} para incorporarse al equipo de {row.get('empresa')}. Especialidad: {row.get('especialidad_objetivo')}. Requisitos e infraestructura tecnológica requerida: {hs_str}. Competencias blandas evaluadas: {ss_str}."
+        df_vacantes['descripcion'] = df_vacantes.apply(generar_descripcion_sintetica, axis=1)
 
     # Panel lateral (Sidebar)
     st.sidebar.header("🎯 Filtros del Mercado")
@@ -369,11 +480,11 @@ def main():
         (df_vacantes['especialidad_objetivo'].isin(especialidades_seleccionadas))
     ].reset_index(drop=True)
 
-    st.markdown("<h1 class='main-title'>💼 DataCareer AI</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 class='main-title'>💼 DataCareer AI — Inteligencia de Mercado Data & Analytics</h1>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Ofertas Vigentes Filtradas", len(df_filtrado))
-    col2.metric("Última Sincronización", "19/06/2026 13:40")
+    col2.metric("Última Sincronización", "19/06/2026 14:20")
     col3.metric("Origen Activo", "Supabase DB" if (obtener_cliente_supabase() is not None) else "Simulado / Contingencia")
 
     tab_mercado, tab_evaluador = st.tabs(["📊 Tablero Analítico", "🔍 Evaluador ATS de CV"])
@@ -385,8 +496,8 @@ def main():
             with c1:
                 st.markdown("#### **Distribución por Jerarquías Requeridas**")
                 g1 = alt.Chart(df_filtrado).mark_bar(color='#1e3a8a').encode(
-                    x=alt.X('jerarquia_limpia:N', sort='x', axis=alt.Axis(labelAngle=-45, labelFontSize=10), title="Seniority"),
-                    y=alt.Y('count():Q', title="Vacantes"),
+                    y=alt.Y('jerarquia_limpia:N', sort='ascending', title="Seniority"),
+                    x=alt.X('count():Q', title="Vacantes"),
                     tooltip=['jerarquia_limpia', 'count()']
                 ).properties(height=280)
                 st.altair_chart(g1, use_container_width=True)
@@ -396,8 +507,8 @@ def main():
                 df_hard = df_hard[df_hard['hard_skills'].astype(str).str.len() > 0]
                 if not df_hard.empty:
                     g3 = alt.Chart(df_hard).mark_bar(color='#2ecc71').encode(
-                        x=alt.X('hard_skills:N', sort='-y', axis=alt.Axis(labelAngle=-45, labelFontSize=10), title="Herramientas"),
-                        y=alt.Y('count():Q', title="Apariciones"),
+                        y=alt.Y('hard_skills:N', sort='-x', title="Herramientas"),
+                        x=alt.X('count():Q', title="Apariciones"),
                         tooltip=['hard_skills', 'count()']
                     ).properties(height=280)
                     st.altair_chart(g3, use_container_width=True)
@@ -405,8 +516,8 @@ def main():
             with c2:
                 st.markdown("#### **Demanda por Especialidad Funcional**")
                 g2 = alt.Chart(df_filtrado).mark_bar(color='#f39c12').encode(
-                    x=alt.X('especialidad_objetivo:N', sort='-y', axis=alt.Axis(labelAngle=-45, labelFontSize=10), title="Especialidad"),
-                    y=alt.Y('count():Q', title="Vacantes"),
+                    y=alt.Y('especialidad_objetivo:N', sort='-x', title="Especialidad"),
+                    x=alt.X('count():Q', title="Vacantes"),
                     tooltip=['especialidad_objetivo', 'count()']
                 ).properties(height=280)
                 st.altair_chart(g2, use_container_width=True)
@@ -416,8 +527,8 @@ def main():
                 df_soft = df_soft[df_soft['soft_skills'].astype(str).str.len() > 0]
                 if not df_soft.empty:
                     g4 = alt.Chart(df_soft).mark_bar(color='#9b59b6').encode(
-                        x=alt.X('soft_skills:N', sort='-y', axis=alt.Axis(labelAngle=-45, labelFontSize=10), title="Competencias"),
-                        y=alt.Y('count():Q', title="Apariciones"),
+                        y=alt.Y('soft_skills:N', sort='-x', title="Competencias"),
+                        x=alt.X('count():Q', title="Apariciones"),
                         tooltip=['soft_skills', 'count()']
                     ).properties(height=280)
                     st.altair_chart(g4, use_container_width=True)
@@ -478,7 +589,6 @@ def main():
 
                 threading.Thread(target=registrar_telemetria_silenciosa, args=(resultados_analisis,), daemon=True).start()
                 
-                # Modificación: Ordenamiento explícito restringido al Top 10 Real de Match
                 df_resultados = pd.DataFrame(resultados_analisis).sort_values(by="match_score", ascending=False).head(10).reset_index(drop=True)
                 
                 st.success("¡Análisis de compatibilidad finalizado!")
@@ -511,5 +621,12 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
 
+
 if __name__ == "__main__":
-    main()
+    # Si ejecutas directamente con 'python app.py' se cargan las ofertas de prueba.
+    # Si se ejecuta mediante 'streamlit run app.py', se inicia la interfaz web y maneja la base de datos de manera segura.
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "load_data":
+        cargar_vacantes_a_supabase()
+    else:
+        main()
