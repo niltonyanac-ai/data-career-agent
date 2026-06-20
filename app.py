@@ -170,7 +170,7 @@ class EvaluacionMatch(BaseModel):
     match_score: int = Field(..., description="Porcentaje de match real de 0 a 100 basado estrictamente en el cumplimiento de requisitos.")
     justificacion: str = Field(..., description="Explicación analítica clara detallando por qué cumple o no con el perfil.")
     habilidades_coincidentes: list[str] = Field(..., description="Lista de habilidades que el candidato sí posee.")
-    habilidades_faltantes: list[str] = Field(..., description="Lista de tecnologías, herramientas o requisitos ausentes en el CV.")
+    habilidades_faltantes: list[str] = Field(..., description="Lista de tecnologías, herramientas o requisitos ausentes in el CV.")
 
 
 # =====================================================================
@@ -211,10 +211,6 @@ def inferir_pais_por_datos(row):
     return 'Remoto Latam'
 
 def pre_ranking_ats_vectorial(df, texto_cv):
-    """
-    MEJORA CRÍTICA: Reemplaza la heurística rudimentaria por una matriz de similitud de coseno (TF-IDF).
-    Determina de forma matemática la proximidad semántica real antes de segmentar para el LLM.
-    """
     if df.empty or not texto_cv.strip():
         return df
 
@@ -226,18 +222,15 @@ def pre_ranking_ats_vectorial(df, texto_cv):
     cv_limpio = preprocesar(texto_cv)
     descripciones = df['descripcion'].fillna('').apply(preprocesar).tolist()
     
-    # Construcción espacio-vectorial de términos
     textos_totales = [cv_limpio] + descripciones
     vectorizer = TfidfVectorizer()
     tfidf_matrix = vectorizer.fit_transform(textos_totales)
     
-    # Similitud geométrica entre vector de CV [0] y vectores de vacantes [1:]
     similitudes = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
     
     df_ranked = df.copy()
     df_ranked['_score_vectorial'] = similitudes * 100
     
-    # Ordenamos de forma descendente por afinidad estadística pura
     return df_ranked.sort_values(by='_score_vectorial', ascending=False).drop(columns=['_score_vectorial'])
 
 def extraer_texto_pdf(archivo_pdf):
@@ -303,8 +296,9 @@ def evaluar_cv_contra_vacante(args):
     }
     
     try:
+        # CORRECCIÓN DE PRODUCCIÓN: Parámetro 'model' en lugar de 'model_name'
         model_instance = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
+            model="gemini-1.5-flash",
             system_instruction="Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA."
         )
         
@@ -362,16 +356,12 @@ def registrar_telemetria_silenciosa(resultados_analisis):
 # =====================================================================
 @st.cache_data(ttl=600)
 def cargar_datos_seguros():
-    """
-    CORRECCIÓN: Devuelve tanto el DataFrame como la traza exacta del Origen Activo
-    para evitar inconsistencias en el renderizado de telemetría del Front.
-    """
     supabase = obtener_cliente_supabase()
     if supabase:
         try:
             respuesta = supabase.table("vacantes").select("*").execute()
             if respuesta.data and len(respuesta.data) > 0:
-                return pd.DataFrame(respuesta.data), "Producción / Supabase"
+                return pd.DataFrame(respuesta.data), "Supabase DB"
         except Exception as e:
             st.sidebar.error(f"Error cargando DB: {str(e)}. Activando contingencia.")
     
@@ -489,8 +479,7 @@ def main():
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Ofertas Vigentes Filtradas", len(df_filtrado))
-    col2.metric("Última Sincronización", "19/06/2026 14:20")
-    # CORRECCIÓN: Renderizado directo y coherente auditado del origen analítico extraído de base de datos
+    col2.metric("Última Sincronización", "19/06/2026 22:20")
     col3.metric("Origen Activo", origen_activo)
 
     tab_mercado, tab_evaluador = st.tabs(["📊 Tablero Analítico", "🔍 Evaluador ATS de CV"])
@@ -572,7 +561,7 @@ def main():
                 cv_hash = hashlib.md5(st.session_state["texto_cv_usuario"].encode('utf-8')).hexdigest()
                 
                 # REGLA DE NEGOCIO: Selección por Filtro Estadístico Vectorial TF-IDF para optimizar costos de API
-                MAX_LLM_CALLS = 10
+                MAX_LLM_CALLS = 15
                 if len(df_analizar) > MAX_LLM_CALLS:
                     df_analizar = pre_ranking_ats_vectorial(df_analizar, st.session_state["texto_cv_usuario"]).head(MAX_LLM_CALLS)
                 
@@ -596,37 +585,47 @@ def main():
 
                 threading.Thread(target=registrar_telemetria_silenciosa, args=(resultados_analisis,), daemon=True).start()
                 
-                df_resultados = pd.DataFrame(resultados_analisis).sort_values(by="match_score", ascending=False).head(10).reset_index(drop=True)
+                # --- REGLA DE NEGOCIO DE PRODUCCIÓN: FILTRADO TOP 5 CON MATCH >= 70% ---
+                df_procesado = pd.DataFrame(resultados_analisis)
                 
-                st.success("¡Análisis de compatibilidad finalizado!")
+                # Filtrar solo registros válidos con un porcentaje real mayor o igual a 70%
+                df_filtrado_match = df_procesado[df_procesado["match_score"] >= 70]
                 
-                for idx, res in df_resultados.iterrows():
-                    score = res["match_score"]
-                    color_badge = "#2ecc71" if score >= 70 else ("#f39c12" if score >= 45 else "#e74c3c")
-                    link_html = f'<a href="{res["link"]}" target="_blank" class="action-link">🎯 Ver Vacante Activa en {res["empresa"]}</a>' if res.get("link") else ""
+                # Ordenar descendentemente por puntuación y tomar un máximo de 5 filas
+                df_resultados = df_filtrado_match.sort_values(by="match_score", ascending=False).head(5).reset_index(drop=True)
+                
+                if df_resultados.empty:
+                    st.warning("⚠️ No se encontraron ofertas que superen el 70% de match con el perfil de tu CV.")
+                else:
+                    st.success(f"¡Análisis de compatibilidad finalizado! Mostrando las {len(df_resultados)} mejores vacantes.")
                     
-                    st.markdown(f"""
-                    <div class="match-card">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #f1f5f9; padding-bottom: 10px;">
-                            <h4 style="margin: 0; color: #1e3a8a; font-size: 1.25em;">
-                                {res.get('titulo')} <span style="color: #6b7280; font-size: 0.85em; font-weight: normal;">({res.get('empresa')})</span>
-                            </h4>
-                            <span style="background-color: {color_badge}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.9em; white-space: nowrap;">
-                                {score}% Match
-                            </span>
+                    for idx, res in df_resultados.iterrows():
+                        score = res["match_score"]
+                        color_badge = "#2ecc71" # Verde puro para producción segura >= 70%
+                        link_html = f'<a href="{res["link"]}" target="_blank" class="action-link">🎯 Ver Vacante Activa en {res["empresa"]}</a>' if res.get("link") else ""
+                        
+                        st.markdown(f"""
+                        <div class="match-card">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #f1f5f9; padding-bottom: 10px;">
+                                <h4 style="margin: 0; color: #1e3a8a; font-size: 1.25em;">
+                                    {res.get('titulo')} <span style="color: #6b7280; font-size: 0.85em; font-weight: normal;">({res.get('empresa')})</span>
+                                </h4>
+                                <span style="background-color: {color_badge}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.9em; white-space: nowrap;">
+                                    {score}% Match
+                                </span>
+                            </div>
+                            <div style="margin-bottom: 12px; color: #334155; font-size: 0.95em; line-height: 1.5;">
+                                <strong>Análisis Estratégico ATS:</strong> {res.get('justificacion')}
+                            </div>
+                            <div style="margin-bottom: 8px; font-size: 0.9em; color: #16a34a;">
+                                <strong>✓ Habilidades Coincidentes:</strong> {', '.join(res.get('coincidentes', [])) if res.get('coincidentes') else 'Ninguna detectada explícitamente.'}
+                            </div>
+                            <div style="margin-bottom: 12px; font-size: 0.9em; color: #dc2626;">
+                                <strong>✗ Brechas Técnicas:</strong> {', '.join(res.get('faltantes', [])) if res.get('faltantes') else 'Ninguna brecha crítica detectada.'}
+                            </div>
+                            {link_html}
                         </div>
-                        <div style="margin-bottom: 12px; color: #334155; font-size: 0.95em; line-height: 1.5;">
-                            <strong>Análisis Estratégico ATS:</strong> {res.get('justificacion')}
-                        </div>
-                        <div style="margin-bottom: 8px; font-size: 0.9em; color: #16a34a;">
-                            <strong>✓ Habilidades Coincidentes:</strong> {', '.join(res.get('coincidentes', [])) if res.get('coincidentes') else 'Ninguna detectada explícitamente.'}
-                        </div>
-                        <div style="margin-bottom: 12px; font-size: 0.9em; color: #dc2626;">
-                            <strong>✗ Brechas Técnicas:</strong> {', '.join(res.get('faltantes', [])) if res.get('faltantes') else 'Ninguna brecha crítica detectada.'}
-                        </div>
-                        {link_html}
-                    </div>
-                    """, unsafe_allow_html=True)
+                        """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
