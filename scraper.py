@@ -7,6 +7,9 @@ from supabase import create_client
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+# =====================================================================
+# CONFIGURACIÓN DE VARIABLES DE ENTORNO
+# =====================================================================
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "TU_SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "TU_SUPABASE_KEY")
 
@@ -46,7 +49,6 @@ def generar_mock_ofertas_representativas():
     pool_soft_skills = ["Comunicación Asertiva", "Liderazgo", "Resolución de Problemas", "Trabajo en Equipo", "Pensamiento Crítico", "Negociación"]
     
     ofertas = []
-    # CORRECCIÓN: Elevado a 200 para superar el umbral de 180 requerido
     for i in range(200):
         esp = random.choice(especialidades)
         rol = random.choice(roles) if esp != "Business Intelligence" else "Analista de BI"
@@ -66,14 +68,15 @@ def generar_mock_ofertas_representativas():
             "jerarquia": nivel,
             "especialidad_objetivo": esp,
             "descripcion": f"Buscamos un {titulo} para unirse al equipo de {emp} en {pais}. Requisitos clave: {', '.join(h_skills)}. Capacidad de {', '.join(s_skills)}.",
-            "hard_skills": h_skills,
-            "soft_skills": s_skills
+            "hard_skills": json.dumps(h_skills), # Almacenado como JSON String para coincidir con tu esquema de Supabase
+            "soft_skills": json.dumps(s_skills)   # Almacenado como JSON String para coincidir con tu esquema de Supabase
         })
     return ofertas
 
 def cargar_vacantes_a_supabase():
-    if SUPABASE_URL == "TU_SUPABASE_URL":
-        print("⚠️ Configura las variables de entorno de Supabase.")
+    """Pobla la base de datos de producción usando inserciones controladas."""
+    if SUPABASE_URL == "TU_SUPABASE_URL" or not SUPABASE_URL:
+        print("⚠️ Configura las variables de entorno válidas de Supabase antes de ejecutar la carga.")
         return
         
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -83,81 +86,55 @@ def cargar_vacantes_a_supabase():
     exitos = 0
     for oferta in ofertas:
         try:
-            # CORRECCIÓN: .insert() en lugar de .upsert() para evitar fallos por ausencia de ID único explícito
             supabase.table("vacantes").insert(oferta).execute()
             exitos += 1
         except Exception as e:
-            print(f"Error insertando oferta: {str(e)}")
+            print(f"Error insertando oferta individual: {str(e)}")
             
-    print(f"Procesamiento finalizado. {exitos} registros nuevos indexados.")
-
-
-# =====================================================================
-# NUEVAS MEJORAS COMPLEMENTARIAS (PRODUCCIÓN Y EVALUADOR ATS DE CV)
-# =====================================================================
+    print(f"Procesamiento finalizado. {exitos} registros nuevos indexados con éxito.")
 
 def obtener_datos_produccion():
-    """
-    Audita la conexión a Supabase y descarga la data real.
-    Si falla o no está configurado, activa la contingencia de forma segura.
-    """
+    """Descarga la data real de Supabase. Activa contingencia automática si el canal falla."""
     if SUPABASE_URL == "TU_SUPABASE_URL" or not SUPABASE_URL:
-        # Si no hay credenciales reales en las variables de entorno, devolvemos la simulación
-        df_mock = pd.DataFrame(generar_mock_ofertas_representativas())
-        return df_mock, "Simulado / Contingencia"
-    
+        return pd.DataFrame(generar_mock_ofertas_representativas()), "Simulado / Contingencia"
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
         response = supabase.table("vacantes").select("*").execute()
-        
         if response.data and len(response.data) > 0:
-            df_real = pd.DataFrame(response.data)
-            return df_real, "Producción / Supabase"
-        else:
-            # Si la tabla está vacía, fallback a simulación
-            df_mock = pd.DataFrame(generar_mock_ofertas_representativas())
-            return df_mock, "Simulado / Contingencia"
+            return pd.DataFrame(response.data), "Producción / Supabase"
+        return pd.DataFrame(generar_mock_ofertas_representativas()), "Simulado / Contingencia"
     except Exception as e:
-        print(f"Alerta: Redirigiendo a contingencia por error en producción: {e}")
-        df_mock = pd.DataFrame(generar_mock_ofertas_representativas())
-        return df_mock, "Simulado / Contingencia"
+        print(f"Alerta: Fallo en conexión productiva ({e}). Redirigiendo a contingencia.")
+        return pd.DataFrame(generar_mock_ofertas_representativas()), "Simulado / Contingencia"
 
 def calcular_match_ats_cv(texto_cv, df_ofertas):
     """
-    Calcula matemáticamente el % de afinidad entre el CV y la descripción del puesto.
-    Filtra ofertas con match > 70% y retorna el Top 10 ordenado.
+    Realiza un screening preliminar estadístico por TF-IDF para seleccionar 
+    las 15 vacantes más viables semánticamente y evitar agotar cuotas del LLM.
     """
     if df_ofertas.empty or not texto_cv:
         return pd.DataFrame()
     
-    # Limpieza estándar para evitar distorsiones por caracteres especiales
     def preprocesar(texto):
         texto = str(texto).lower()
-        texto = re.sub(r'[^\w\s]', ' ', texto)
-        return texto
+        return re.sub(r'[^\w\s]', ' ', texto)
 
     cv_limpio = preprocesar(texto_cv)
     descripciones = df_ofertas['descripcion'].fillna('').apply(preprocesar).tolist()
     
-    # Construcción de la matriz numérica con TF-IDF
-    textos_totales = [cv_limpio] + descripciones
     vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform(textos_totales)
-    
-    # Medición de similitud geométrica (Coseno) entre el CV [0] y las vacantes [1:]
+    tfidf_matrix = vectorizer.fit_transform([cv_limpio] + descripciones)
     similitudes = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
     
-    # Inyección de la métrica en una copia para proteger los datos originales
     df_analisis = df_ofertas.copy()
-    df_analisis['Match %'] = similitudes * 100
+    df_analisis['score_screening'] = similitudes * 100
     
-    # REGLA: Filtrar estrictamente por encima del 70% de afinidad
-    df_filtrado = df_analisis[df_analisis['Match %'] > 70]
-    
-    # Extraer las 10 ofertas con mayor rendimiento analítico
-    df_top_10 = df_filtrado.sort_values(by='Match %', ascending=False).head(10)
-    
-    return df_top_10
+    # Retornamos las mejores posicionadas estadísticamente para ser evaluadas por Gemini en la UI de app.py
+    return df_analisis.sort_values(by='score_screening', ascending=False).head(15)
 
+# =====================================================================
+# BLOQUE DE EJECUCIÓN (AUDITORÍA Y POBLAMIENTO)
+# =====================================================================
 if __name__ == "__main__":
+    # Permite ejecutar este script directamente en la terminal para alimentar tu base de datos en Supabase
     cargar_vacantes_a_supabase()
