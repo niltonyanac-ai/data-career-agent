@@ -4,6 +4,7 @@ import random
 import hashlib
 import threading
 import re
+from typing import List  # CORRECCIÓN 1: Importación indispensable para response_schema
 import pandas as pd
 import altair as alt
 from concurrent.futures import ThreadPoolExecutor
@@ -144,15 +145,11 @@ if "texto_cv_usuario" not in st.session_state:
 if "ats_cache" not in st.session_state:
     st.session_state["ats_cache"] = {}
 
-# 1. Validamos que la variable exista en los Secrets
 if "GEMINI_API_KEY" in st.secrets:
     api_key_actual = st.secrets["GEMINI_API_KEY"]
-    
-    # 2. Control de CX: Evitar que tenga valores por defecto o vacíos
     if api_key_actual in ["", "TU_API_KEY_AQUI", "YOUR_API_KEY"]:
         st.error("⚠️ La API Key de Gemini está vacía o usa el texto por defecto en secrets.toml.")
     else:
-        # Configuración oficial
         genai.configure(api_key=api_key_actual)
 else:
     st.error("❌ Error Crítico: Falta configurar 'GEMINI_API_KEY' en las credenciales del servidor.")
@@ -167,10 +164,11 @@ def obtener_cliente_supabase():
     return None
 
 class EvaluacionMatch(BaseModel):
+    # CORRECCIÓN 1: Se cambian las declaraciones list por List importada de typing
     match_score: int = Field(..., description="Porcentaje de match real de 0 a 100 basado estrictamente en el cumplimiento de requisitos.")
     justificacion: str = Field(..., description="Explicación analítica clara detallando por qué cumple o no con el perfil.")
-    habilidades_coincidentes: list[str] = Field(..., description="Lista de habilidades que el candidato sí posee.")
-    habilidades_faltantes: list[str] = Field(..., description="Lista de tecnologías, herramientas o requisitos ausentes in el CV.")
+    habilidades_coincidentes: List[str] = Field(..., description="Lista de habilidades que el candidato sí posee.")
+    habilidades_faltantes: List[str] = Field(..., description="Lista de tecnologías, herramientas o requisitos ausentes en el CV.")
 
 
 # =====================================================================
@@ -296,7 +294,7 @@ def evaluar_cv_contra_vacante(args):
     }
     
     try:
-        # CORRECCIÓN DE PRODUCCIÓN: Parámetro 'model' en lugar de 'model_name'
+        # PARÁMETRO CORRECTO: Usando 'model' según especificaciones estables
         model_instance = genai.GenerativeModel(
             model="gemini-1.5-flash",
             system_instruction="Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA."
@@ -450,7 +448,6 @@ def main():
             return f"Búsqueda activa de {row.get('titulo')} para incorporarse al equipo de {row.get('empresa')}. Especialidad: {row.get('especialidad_objetivo')}. Requisitos e infraestructura tecnológica requerida: {hs_str}. Competencias blandas evaluadas: {ss_str}."
         df_vacantes['descripcion'] = df_vacantes.apply(generar_descripcion_sintetica, axis=1)
 
-    # Panel lateral (Sidebar)
     st.sidebar.header("🎯 Filtros del Mercado")
 
     lista_paises = sorted(list(df_vacantes['pais'].unique()))
@@ -498,7 +495,10 @@ def main():
                 st.altair_chart(g1, use_container_width=True)
 
                 st.markdown("#### **Top Hard Skills más Demandadas**")
-                df_hard = df_filtrado.explode('hard_skills')
+                # CORRECCIÓN 2: Aseguramos la existencia e inicialización de listas válidas para evitar fallos de pandas
+                df_vacantes_validas = df_filtrado.copy()
+                df_vacantes_validas['hard_skills'] = df_vacantes_validas['hard_skills'].apply(lambda x: x if isinstance(x, list) else [])
+                df_hard = df_vacantes_validas.explode('hard_skills')
                 df_hard = df_hard[df_hard['hard_skills'].astype(str).str.len() > 0]
                 if not df_hard.empty:
                     g3 = alt.Chart(df_hard).mark_bar(color='#2ecc71').encode(
@@ -518,7 +518,9 @@ def main():
                 st.altair_chart(g2, use_container_width=True)
 
                 st.markdown("#### **Top Soft Skills Requeridas**")
-                df_soft = df_filtrado.explode('soft_skills')
+                # CORRECCIÓN 2 (Continuación): Inicialización segura para competencias blandas
+                df_vacantes_validas['soft_skills'] = df_vacantes_validas['soft_skills'].apply(lambda x: x if isinstance(x, list) else [])
+                df_soft = df_vacantes_validas.explode('soft_skills')
                 df_soft = df_soft[df_soft['soft_skills'].astype(str).str.len() > 0]
                 if not df_soft.empty:
                     g4 = alt.Chart(df_soft).mark_bar(color='#9b59b6').encode(
@@ -560,7 +562,6 @@ def main():
                 df_analizar = df_filtrado if not df_filtrado.empty else df_vacantes
                 cv_hash = hashlib.md5(st.session_state["texto_cv_usuario"].encode('utf-8')).hexdigest()
                 
-                # REGLA DE NEGOCIO: Selección por Filtro Estadístico Vectorial TF-IDF para optimizar costos de API
                 MAX_LLM_CALLS = 15
                 if len(df_analizar) > MAX_LLM_CALLS:
                     df_analizar = pre_ranking_ats_vectorial(df_analizar, st.session_state["texto_cv_usuario"]).head(MAX_LLM_CALLS)
@@ -585,14 +586,17 @@ def main():
 
                 threading.Thread(target=registrar_telemetria_silenciosa, args=(resultados_analisis,), daemon=True).start()
                 
-                # --- REGLA DE NEGOCIO DE PRODUCCIÓN: FILTRADO TOP 5 CON MATCH >= 70% ---
-                df_procesado = pd.DataFrame(resultados_analisis)
-                
-                # Filtrar solo registros válidos con un porcentaje real mayor o igual a 70%
-                df_filtrado_match = df_procesado[df_procesado["match_score"] >= 70]
-                
-                # Ordenar descendentemente por puntuación y tomar un máximo de 5 filas
-                df_resultados = df_filtrado_match.sort_values(by="match_score", ascending=False).head(5).reset_index(drop=True)
+                # --- CORRECCIÓN 3: Validación defensiva antes de la segmentación del dataframe de salida ---
+                if resultados_analisis:
+                    df_procesado = pd.DataFrame(resultados_analisis)
+                    
+                    if "match_score" in df_procesado.columns:
+                        df_filtrado_match = df_procesado[df_procesado["match_score"] >= 70]
+                        df_resultados = df_filtrado_match.sort_values(by="match_score", ascending=False).head(5).reset_index(drop=True)
+                    else:
+                        df_resultados = pd.DataFrame()
+                else:
+                    df_resultados = pd.DataFrame()
                 
                 if df_resultados.empty:
                     st.warning("⚠️ No se encontraron ofertas que superen el 70% de match con el perfil de tu CV.")
@@ -601,7 +605,7 @@ def main():
                     
                     for idx, res in df_resultados.iterrows():
                         score = res["match_score"]
-                        color_badge = "#2ecc71" # Verde puro para producción segura >= 70%
+                        color_badge = "#2ecc71"
                         link_html = f'<a href="{res["link"]}" target="_blank" class="action-link">🎯 Ver Vacante Activa en {res["empresa"]}</a>' if res.get("link") else ""
                         
                         st.markdown(f"""
