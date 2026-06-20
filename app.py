@@ -144,10 +144,18 @@ if "texto_cv_usuario" not in st.session_state:
 if "ats_cache" not in st.session_state:
     st.session_state["ats_cache"] = {}
 
+# 1. Validamos que la variable exista en los Secrets
 if "GEMINI_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    api_key_actual = st.secrets["GEMINI_API_KEY"]
+    
+    # 2. Control de CX: Evitar que tenga valores por defecto o vacíos
+    if api_key_actual in ["", "TU_API_KEY_AQUI", "YOUR_API_KEY"]:
+        st.error("⚠️ La API Key de Gemini está vacía o usa el texto por defecto en secrets.toml.")
+    else:
+        # Configuración oficial
+        genai.configure(api_key=api_key_actual)
 else:
-    st.warning("Falta configurar 'GEMINI_API_KEY' in st.secrets.")
+    st.error("❌ Error Crítico: Falta configurar 'GEMINI_API_KEY' en las credenciales del servidor.")
 
 @st.cache_resource
 def obtener_cliente_supabase():
