@@ -3,12 +3,15 @@ import json
 import random
 import hashlib
 import threading
+import re
 import pandas as pd
 import altair as alt
 from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 from supabase import create_client, Client
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 import streamlit as st
 import google.generativeai as genai
 import google.api_core.exceptions as google_exceptions
@@ -89,8 +92,6 @@ def cargar_vacantes_a_supabase():
     
     print(f"Iniciando carga masiva de {len(ofertas)} ofertas indexadas...")
     try:
-        # EFICIENCIA MÁXIMA: Insertamos toda la lista en un único viaje de red
-        # Nota: Asegúrate de que tu tabla en Supabase tenga auto-incremento o UUID en su llave primaria.
         respuesta = supabase.table("vacantes").insert(ofertas).execute()
         print(f"¡Procesamiento finalizado con éxito! {len(respuesta.data)} registros nuevos indexados de golpe.")
     except Exception as e:
@@ -146,7 +147,7 @@ if "ats_cache" not in st.session_state:
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 else:
-    st.warning("Falta configurar 'GEMINI_API_KEY' en st.secrets.")
+    st.warning("Falta configurar 'GEMINI_API_KEY' in st.secrets.")
 
 @st.cache_resource
 def obtener_cliente_supabase():
@@ -184,7 +185,6 @@ def normalizar_jerarquia(texto):
     return "3. Analista / Profesional"
 
 def inferir_pais_por_datos(row):
-    """Deducción heurística respetando la metadata nativa existente"""
     if pd.notna(row.get('pais')) and str(row.get('pais')).strip() != '' and str(row.get('pais')).lower() != 'nan':
         return str(row.get('pais')).strip()
 
@@ -202,42 +202,35 @@ def inferir_pais_por_datos(row):
         return 'Ecuador'
     return 'Remoto Latam'
 
-def pre_ranking_heuristico(df, texto_cv):
-    cv_clean = str(texto_cv).lower()
-    scores = []
-    stop_words = {"para", "como", "esta", "este", "todo", "sino", "pero", "experiencia", "conocimiento", "manejo", "perfil"}
-    keywords_niveles = {
-        "1.": ["practicante", "intern", "trainee"],
-        "2.": ["junior", "jr", "asistente"],
-        "3.": ["analista", "professional", "profesional"],
-        "4.": ["senior", "sr", "especialista", "advanced"],
-        "5.": ["lider", "lead", "jefe", "supervisor"],
-        "6.": ["gerente", "manager", "director", "head"]
-    }
+def pre_ranking_ats_vectorial(df, texto_cv):
+    """
+    MEJORA CRÍTICA: Reemplaza la heurística rudimentaria por una matriz de similitud de coseno (TF-IDF).
+    Determina de forma matemática la proximidad semántica real antes de segmentar para el LLM.
+    """
+    if df.empty or not texto_cv.strip():
+        return df
+
+    def preprocesar(texto):
+        texto = str(texto).lower()
+        texto = re.sub(r'[^\w\s]', ' ', texto)
+        return texto
+
+    cv_limpio = preprocesar(texto_cv)
+    descripciones = df['descripcion'].fillna('').apply(preprocesar).tolist()
     
-    for _, fila in df.iterrows():
-        score_local = 0
-        jerarquia_puesto = str(fila.get('jerarquia_limpia', ''))
-        
-        for prefix, tokens in keywords_niveles.items():
-            if prefix in jerarquia_puesto:
-                if any(t in cv_clean for t in tokens):
-                    score_local += 40
-                break
-        
-        desc_puesto = str(fila.get('descripcion', '')).lower()
-        palabras_filtradas = [
-            p for p in desc_puesto.replace(',', ' ').replace('.', ' ').replace(':', ' ').split() 
-            if len(p) > 3 and p not in stop_words
-        ]
-        
-        coincidencias_tech = sum(1 for p in palabras_filtradas[:25] if p in cv_clean)
-        score_local += (coincidencias_tech * 6)
-        scores.append(score_local)
-        
+    # Construcción espacio-vectorial de términos
+    textos_totales = [cv_limpio] + descripciones
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(textos_totales)
+    
+    # Similitud geométrica entre vector de CV [0] y vectores de vacantes [1:]
+    similitudes = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+    
     df_ranked = df.copy()
-    df_ranked['_score_heuristico'] = scores
-    return df_ranked.sort_values(by='_score_heuristico', ascending=False).drop(columns=['_score_heuristico'])
+    df_ranked['_score_vectorial'] = similitudes * 100
+    
+    # Ordenamos de forma descendente por afinidad estadística pura
+    return df_ranked.sort_values(by='_score_vectorial', ascending=False).drop(columns=['_score_vectorial'])
 
 def extraer_texto_pdf(archivo_pdf):
     try:
@@ -270,7 +263,7 @@ def evaluar_cv_contra_vacante(args):
     Título de la Oferta: {titulo_puesto}
     Empresa: {empresa_puesto}
     Especialidad Funcional: {fila_vacante.get('especialidad_objetivo', 'No especificado')}
-    Jerarquía Requerida: {fila_vacante.get('jerarquia_limpia', 'No especificada')}
+    Jerarquía Requerida: {fila_vacante.get('jerarquia_limpia', 'No específica')}
     Descripción Detallada del Puesto: {fila_vacante.get('descripcion', 'No especificada')}
     """
     
@@ -361,12 +354,16 @@ def registrar_telemetria_silenciosa(resultados_analisis):
 # =====================================================================
 @st.cache_data(ttl=600)
 def cargar_datos_seguros():
+    """
+    CORRECCIÓN: Devuelve tanto el DataFrame como la traza exacta del Origen Activo
+    para evitar inconsistencias en el renderizado de telemetría del Front.
+    """
     supabase = obtener_cliente_supabase()
     if supabase:
         try:
             respuesta = supabase.table("vacantes").select("*").execute()
             if respuesta.data and len(respuesta.data) > 0:
-                return pd.DataFrame(respuesta.data)
+                return pd.DataFrame(respuesta.data), "Producción / Supabase"
         except Exception as e:
             st.sidebar.error(f"Error cargando DB: {str(e)}. Activando contingencia.")
     
@@ -405,14 +402,14 @@ def cargar_datos_seguros():
             "hard_skills": hs,
             "soft_skills": ss
         })
-    return pd.DataFrame(contingencia)
+    return pd.DataFrame(contingencia), "Simulado / Contingencia"
 
 
 # =====================================================================
 # 5. FUNCIÓN PRINCIPAL DE LA APLICACIÓN (FRONTEND & UX)
 # =====================================================================
 def main():
-    df_raw = cargar_datos_seguros()
+    df_raw, origen_activo = cargar_datos_seguros()
     df_vacantes = df_raw.copy()
 
     mapeo_columnas = {
@@ -485,7 +482,8 @@ def main():
     col1, col2, col3 = st.columns(3)
     col1.metric("Ofertas Vigentes Filtradas", len(df_filtrado))
     col2.metric("Última Sincronización", "19/06/2026 14:20")
-    col3.metric("Origen Activo", "Supabase DB" if (obtener_cliente_supabase() is not None) else "Simulado / Contingencia")
+    # CORRECCIÓN: Renderizado directo y coherente auditado del origen analítico extraído de base de datos
+    col3.metric("Origen Activo", origen_activo)
 
     tab_mercado, tab_evaluador = st.tabs(["📊 Tablero Analítico", "🔍 Evaluador ATS de CV"])
 
@@ -565,9 +563,10 @@ def main():
                 df_analizar = df_filtrado if not df_filtrado.empty else df_vacantes
                 cv_hash = hashlib.md5(st.session_state["texto_cv_usuario"].encode('utf-8')).hexdigest()
                 
+                # REGLA DE NEGOCIO: Selección por Filtro Estadístico Vectorial TF-IDF para optimizar costos de API
                 MAX_LLM_CALLS = 10
                 if len(df_analizar) > MAX_LLM_CALLS:
-                    df_analizar = pre_ranking_heuristico(df_analizar, st.session_state["texto_cv_usuario"]).head(MAX_LLM_CALLS)
+                    df_analizar = pre_ranking_ats_vectorial(df_analizar, st.session_state["texto_cv_usuario"]).head(MAX_LLM_CALLS)
                 
                 payloads = [
                     {
@@ -623,8 +622,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # Si ejecutas directamente con 'python app.py' se cargan las ofertas de prueba.
-    # Si se ejecuta mediante 'streamlit run app.py', se inicia la interfaz web y maneja la base de datos de manera segura.
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "load_data":
         cargar_vacantes_a_supabase()
