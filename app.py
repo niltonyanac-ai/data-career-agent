@@ -4,7 +4,7 @@ import random
 import hashlib
 import threading
 import re
-from typing import List  # CORRECCIÓN 1: Importación indispensable para response_schema
+from typing import List
 import pandas as pd
 import altair as alt
 from concurrent.futures import ThreadPoolExecutor
@@ -70,6 +70,7 @@ def generar_mock_ofertas_representativas():
         emp = random.choice(empresas)
         pais = random.choice(paises)
         
+        # Paridad con el esquema de Supabase: Guardar como JSON serializado
         ofertas.append({
             "link_oferta": f"https://www.linkedin.com/jobs/view/simulado-{i+1000}",
             "titulo": titulo,
@@ -78,8 +79,8 @@ def generar_mock_ofertas_representativas():
             "jerarquia": nivel,
             "especialidad_objetivo": esp,
             "descripcion": f"Buscamos un {titulo} para unirse al equipo de {emp} en {pais}. Requisitos clave: {', '.join(h_skills)}. Capacidad de {', '.join(s_skills)}.",
-            "hard_skills": h_skills,
-            "soft_skills": s_skills
+            "hard_skills": json.dumps(h_skills),
+            "soft_skills": json.dumps(s_skills)
         })
     return ofertas
 
@@ -94,7 +95,7 @@ def cargar_vacantes_a_supabase():
     print(f"Iniciando carga masiva de {len(ofertas)} ofertas indexadas...")
     try:
         respuesta = supabase.table("vacantes").insert(ofertas).execute()
-        print(f"¡Procesamiento finalizado con éxito! {len(respuesta.data)} registros nuevos indexados de golpe.")
+        print(f"¡Procesamiento finalizado con éxito! {len(respuesta.data)} registros nuevos indexados.")
     except Exception as e:
         print(f"❌ Fallo crítico en la inserción masiva: {str(e)}")
 
@@ -164,7 +165,6 @@ def obtener_cliente_supabase():
     return None
 
 class EvaluacionMatch(BaseModel):
-    # CORRECCIÓN 1: Se cambian las declaraciones list por List importada de typing
     match_score: int = Field(..., description="Porcentaje de match real de 0 a 100 basado estrictamente en el cumplimiento de requisitos.")
     justificacion: str = Field(..., description="Explicación analítica clara detallando por qué cumple o no con el perfil.")
     habilidades_coincidentes: List[str] = Field(..., description="Lista de habilidades que el candidato sí posee.")
@@ -174,6 +174,29 @@ class EvaluacionMatch(BaseModel):
 # =====================================================================
 # 3. CAPA DE INTELIGENCIA Y PROCESAMIENTO (BACKEND DEL APLICATIVO)
 # =====================================================================
+def normalizar_lista(val):
+    """Parsea de forma inductiva strings JSON, listas nativas o texto plano con comas."""
+    if pd.isna(val) or val is None:
+        return []
+    if isinstance(val, list):
+        return [str(x).strip() for x in val if str(x).strip()]
+    
+    texto = str(val).strip()
+    if not texto:
+        return []
+        
+    if texto.startswith("[") and texto.endswith("]"):
+        try:
+            parsed = json.loads(texto)
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        except Exception:
+            pass
+            
+    # Intento de contingencia por expresiones regulares si el JSON falla
+    texto_limpio = re.sub(r'[\[\]"\'`]', '', texto)
+    return [x.strip() for x in texto_limpio.split(",") if x.strip()]
+
 def normalizar_jerarquia(texto):
     if pd.isna(texto) or texto is None: 
         return "3. Analista / Profesional"
@@ -286,7 +309,7 @@ def evaluar_cv_contra_vacante(args):
         "empresa": empresa_puesto,
         "link": link_puesto,
         "jerarquia_evaluada": fila_vacante.get('jerarquia_limpia', 'No clasificada'),
-        "match_score": 0,
+        "match_score": -100,  # Valor de contingencia robusta frente a excepciones
         "coincidentes": [],
         "faltantes": [],
         "justificacion": "",
@@ -294,7 +317,6 @@ def evaluar_cv_contra_vacante(args):
     }
     
     try:
-        # PARÁMETRO CORRECTO: Usando 'model' según especificaciones estables
         model_instance = genai.GenerativeModel(
             model="gemini-1.5-flash",
             system_instruction="Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA."
@@ -319,8 +341,8 @@ def evaluar_cv_contra_vacante(args):
         resultado_base.update({
             "match_score": int(evaluacion.get("match_score", 0)),
             "justificacion": evaluacion.get("justificacion", "Análisis completado exitosamente."),
-            "coincidentes": evaluacion.get("habilidades_coincidentes", evaluacion.get("coincidentes", [])),
-            "faltantes": evaluacion.get("habilidades_faltantes", evaluacion.get("faltantes", []))
+            "coincidentes": evaluacion.get("habilidades_coincidentes", []),
+            "faltantes": evaluacion.get("habilidades_faltantes", [])
         })
         return resultado_base
         
@@ -328,7 +350,7 @@ def evaluar_cv_contra_vacante(args):
         resultado_base["justificacion"] = "⚠️ Cuota excedida (Rate Limit). Inténtalo de nuevo en unos momentos."
         return resultado_base
     except Exception as e:
-        resultado_base["justificacion"] = f"❌ Error de parsing en el modelo: {str(e)}"
+        resultado_base["justificacion"] = f"❌ Error de procesamiento: {str(e)}"
         return resultado_base
 
 def registrar_telemetria_silenciosa(resultados_analisis):
@@ -337,7 +359,7 @@ def registrar_telemetria_silenciosa(resultados_analisis):
     try:
         datos = []
         for res in resultados_analisis:
-            if res.get("match_score", 0) > 0:
+            if res.get("match_score", -100) >= 0:
                 datos.append({
                     "jerarquia": res.get("jerarquia_evaluada", "Desconocida"),
                     "score": res["match_score"],
@@ -395,8 +417,8 @@ def cargar_datos_seguros():
             "pais": p,
             "descripcion": f"Requerimos profesionales con dominio estructurado en {', '.join(hs)}. Enfoque en {e}.",
             "link_oferta": f"https://www.linkedin.com/jobs/view/mock-{i+100}",
-            "hard_skills": hs,
-            "soft_skills": ss
+            "hard_skills": json.dumps(hs),
+            "soft_skills": json.dumps(ss)
         })
     return pd.DataFrame(contingencia), "Simulado / Contingencia"
 
@@ -429,23 +451,23 @@ def main():
         else:
             df_vacantes[col] = df_vacantes[col].fillna(valor_defecto)
 
-    def limpiar_titulo(row):
-        t = str(row.get('titulo', '')).strip()
-        if not t or t.lower() in ['nan', 'none', 'puesto no especificado', '']:
-            return f"Especialista en {row.get('especialidad_objetivo', 'Analítica de Datos')}"
-        return t
-
-    df_vacantes['titulo'] = df_vacantes.apply(limpiar_titulo, axis=1)
+    df_vacantes['titulo'] = df_vacantes.apply(
+        lambda r: f"Especialista en {r.get('especialidad_objetivo')}" 
+        if str(r.get('titulo', '')).strip().lower() in ['nan', 'none', 'puesto no especificado', ''] 
+        else str(r.get('titulo')).strip(), axis=1
+    )
     df_vacantes['pais'] = df_vacantes.apply(inferir_pais_por_datos, axis=1)
     df_vacantes['jerarquia_limpia'] = df_vacantes['jerarquia'].apply(normalizar_jerarquia)
 
+    # Normalización proactiva de competencias antes de cualquier visualización
+    df_vacantes['hard_skills'] = df_vacantes['hard_skills'].apply(normalizar_lista)
+    df_vacantes['soft_skills'] = df_vacantes['soft_skills'].apply(normalizar_lista)
+
     if 'descripcion' not in df_vacantes.columns or df_vacantes['descripcion'].isna().all():
         def generar_descripcion_sintetica(row):
-            hs = row.get('hard_skills', [])
-            ss = row.get('soft_skills', [])
-            hs_str = ", ".join(hs) if isinstance(hs, list) else str(hs)
-            ss_str = ", ".join(ss) if isinstance(ss, list) else str(ss)
-            return f"Búsqueda activa de {row.get('titulo')} para incorporarse al equipo de {row.get('empresa')}. Especialidad: {row.get('especialidad_objetivo')}. Requisitos e infraestructura tecnológica requerida: {hs_str}. Competencias blandas evaluadas: {ss_str}."
+            hs_str = ", ".join(row['hard_skills'])
+            ss_str = ", ".join(row['soft_skills'])
+            return f"Búsqueda activa de {row.get('titulo')} para incorporarse al equipo de {row.get('empresa')}. Requisitos: {hs_str}. Blandas: {ss_str}."
         df_vacantes['descripcion'] = df_vacantes.apply(generar_descripcion_sintetica, axis=1)
 
     st.sidebar.header("🎯 Filtros del Mercado")
@@ -495,10 +517,7 @@ def main():
                 st.altair_chart(g1, use_container_width=True)
 
                 st.markdown("#### **Top Hard Skills más Demandadas**")
-                # CORRECCIÓN 2: Aseguramos la existencia e inicialización de listas válidas para evitar fallos de pandas
-                df_vacantes_validas = df_filtrado.copy()
-                df_vacantes_validas['hard_skills'] = df_vacantes_validas['hard_skills'].apply(lambda x: x if isinstance(x, list) else [])
-                df_hard = df_vacantes_validas.explode('hard_skills')
+                df_hard = df_filtrado.explode('hard_skills')
                 df_hard = df_hard[df_hard['hard_skills'].astype(str).str.len() > 0]
                 if not df_hard.empty:
                     g3 = alt.Chart(df_hard).mark_bar(color='#2ecc71').encode(
@@ -518,9 +537,7 @@ def main():
                 st.altair_chart(g2, use_container_width=True)
 
                 st.markdown("#### **Top Soft Skills Requeridas**")
-                # CORRECCIÓN 2 (Continuación): Inicialización segura para competencias blandas
-                df_vacantes_validas['soft_skills'] = df_vacantes_validas['soft_skills'].apply(lambda x: x if isinstance(x, list) else [])
-                df_soft = df_vacantes_validas.explode('soft_skills')
+                df_soft = df_filtrado.explode('soft_skills')
                 df_soft = df_soft[df_soft['soft_skills'].astype(str).str.len() > 0]
                 if not df_soft.empty:
                     g4 = alt.Chart(df_soft).mark_bar(color='#9b59b6').encode(
@@ -532,7 +549,6 @@ def main():
 
             st.markdown("---")
             st.markdown("#### **Explorador Detallado de Ofertas Laborales**")
-            
             st.dataframe(
                 df_filtrado[['titulo', 'empresa', 'pais', 'jerarquia_limpia', 'especialidad_objetivo', 'link_oferta']],
                 column_config={
@@ -580,16 +596,15 @@ def main():
                     with ThreadPoolExecutor(max_workers=4) as executor:
                         resultados_analisis = list(executor.map(evaluar_cv_contra_vacante, payloads))
                 
+                # Sincronización limpia de caché
                 for res in resultados_analisis:
-                    if "llave_cache" in res and res.get("match_score", 0) > 0:
+                    if "llave_cache" in res and res.get("match_score", -100) >= 0:
                         st.session_state["ats_cache"][res["llave_cache"]] = res
 
                 threading.Thread(target=registrar_telemetria_silenciosa, args=(resultados_analisis,), daemon=True).start()
                 
-                # --- CORRECCIÓN 3: Validación defensiva antes de la segmentación del dataframe de salida ---
                 if resultados_analisis:
                     df_procesado = pd.DataFrame(resultados_analisis)
-                    
                     if "match_score" in df_procesado.columns:
                         df_filtrado_match = df_procesado[df_procesado["match_score"] >= 70]
                         df_resultados = df_filtrado_match.sort_values(by="match_score", ascending=False).head(5).reset_index(drop=True)
@@ -630,7 +645,6 @@ def main():
                             {link_html}
                         </div>
                         """, unsafe_allow_html=True)
-
 
 if __name__ == "__main__":
     import sys
