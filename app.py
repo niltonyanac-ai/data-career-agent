@@ -474,10 +474,6 @@ def main():
     df_vacantes['hard_skills'] = df_vacantes['hard_skills'].apply(normalizar_lista)
     df_vacantes['soft_skills'] = df_vacantes['soft_skills'].apply(normalizar_lista)
 
-    # 🚀 NUEVO: Convertir las listas limpias a texto para el motor de Match ATS
-    df_vacantes['hard_skills'] = df_vacantes['hard_skills'].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
-    df_vacantes['soft_skills'] = df_vacantes['soft_skills'].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
-
     if 'descripcion' not in df_vacantes.columns or df_vacantes['descripcion'].isna().all():
         def generar_descripcion_sintetica(row):
             hs_str = ", ".join(row['hard_skills'])
@@ -594,8 +590,16 @@ def main():
                 cv_hash = hashlib.md5(st.session_state["texto_cv_usuario"].encode('utf-8')).hexdigest()
                 
                 MAX_LLM_CALLS = 15
-                if len(df_analizar) > MAX_LLM_CALLS:
-                    df_analizar = pre_ranking_ats_vectorial(df_analizar, st.session_state["texto_cv_usuario"]).head(MAX_LLM_CALLS)
+                # 1. Forzar el texto del CV a minúsculas para una comparación justa
+                texto_cv_min = st.session_state["texto_cv_usuario"].lower()
+                
+                # 2. Filtro rápido e insensible a mayúsculas basado en tus listas limpias de Supabase
+                df_analizar['score_preliminar'] = df_analizar['hard_skills'].apply(
+                    lambda x: sum(1 for s in x if str(s).lower().strip() in texto_cv_min) / len(x) * 100 if x else 0
+                )
+                
+                # 3. Ordenar y seleccionar las 15 mejores vacantes con coincidencias reales
+                df_analizar = df_analizar.sort_values(by='score_preliminar', ascending=False).head(MAX_LLM_CALLS)
                 
                 payloads = [
                     {
