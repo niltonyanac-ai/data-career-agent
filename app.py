@@ -630,7 +630,12 @@ def main():
                 
                 if resultados_analisis:
                     df_procesado = pd.DataFrame(resultados_analisis)
+                    
                     if "match_score" in df_procesado.columns:
+                        # 🚀 LÍNEA DE DEBUG TEMPORAL: Insertada para auditar en vivo sin romper nada
+                        st.write("🔍 DEBUG - Puntajes reales devueltos por Gemini:", df_procesado[["match_score"]].to_dict())
+                        
+                        # Tu lógica original intacta continúa aquí abajo:
                         df_filtrado_match = df_procesado[df_procesado["match_score"] >= 70]
                         df_resultados = df_filtrado_match.sort_values(by="match_score", ascending=False).head(5).reset_index(drop=True)
                     else:
