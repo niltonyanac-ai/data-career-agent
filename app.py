@@ -175,27 +175,38 @@ class EvaluacionMatch(BaseModel):
 # 3. CAPA DE INTELIGENCIA Y PROCESAMIENTO (BACKEND DEL APLICATIVO)
 # =====================================================================
 def normalizar_lista(val):
-    """Parsea de forma inductiva strings JSON, listas nativas o texto plano con comas."""
-    if pd.isna(val) or val is None:
+    # 1. Validación segura de nulos
+    if val is None:
         return []
-    if isinstance(val, list):
-        return [str(x).strip() for x in val if str(x).strip()]
     
-    texto = str(val).strip()
-    if not texto:
+    # 2. Si ya es una lista nativa (Caso de Supabase Real)
+    if isinstance(val, list):
+        return [str(item).strip() for item in val if item]
+    
+    # 3. Si es un valor flotante nulo (NaN tradicional de Pandas)
+    if isinstance(val, float) and pd.isna(val):
         return []
         
-    if texto.startswith("[") and texto.endswith("]"):
-        try:
-            parsed = json.loads(texto)
-            if isinstance(parsed, list):
-                return [str(x).strip() for x in parsed if str(x).strip()]
-        except Exception:
-            pass
-            
-    # Intento de contingencia por expresiones regulares si el JSON falla
-    texto_limpio = re.sub(r'[\[\]"\'`]', '', texto)
-    return [x.strip() for x in texto_limpio.split(",") if x.strip()]
+    # 4. Si viene como cadena de texto
+    if isinstance(val, str):
+        val_clean = val.strip()
+        if not val_clean or val_clean.lower() in ['none', 'nan', '[]']:
+            return []
+        
+        # Si la cadena emula una lista de tipo '["SQL", "Python"]'
+        if val_clean.startswith('[') and val_clean.endswith(']'):
+            try:
+                import json
+                parsed = json.loads(val_clean)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if item]
+            except Exception:
+                pass
+                
+        # String común separado por comas
+        return [item.strip() for item in val_clean.split(',') if item.strip()]
+    
+    return []
 
 def normalizar_jerarquia(texto):
     if pd.isna(texto) or texto is None: 
