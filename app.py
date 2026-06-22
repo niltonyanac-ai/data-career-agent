@@ -474,6 +474,10 @@ def main():
     df_vacantes['hard_skills'] = df_vacantes['hard_skills'].apply(normalizar_lista)
     df_vacantes['soft_skills'] = df_vacantes['soft_skills'].apply(normalizar_lista)
 
+    # 🚀 NUEVO: Convertir las listas limpias a texto para el motor de Match ATS
+    df_vacantes['hard_skills'] = df_vacantes['hard_skills'].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
+    df_vacantes['soft_skills'] = df_vacantes['soft_skills'].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
+
     if 'descripcion' not in df_vacantes.columns or df_vacantes['descripcion'].isna().all():
         def generar_descripcion_sintetica(row):
             hs_str = ", ".join(row['hard_skills'])
