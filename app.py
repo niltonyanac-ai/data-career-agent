@@ -170,6 +170,32 @@ class EvaluacionMatch(BaseModel):
     habilidades_coincidentes: List[str] = Field(..., description="Lista de habilidades que el candidato sí posee.")
     habilidades_faltantes: List[str] = Field(..., description="Lista de tecnologías, herramientas o requisitos ausentes en el CV.")
 
+# Esquema de diccionario nativo para Gemini para blindar la ejecución frente a conflictos de Pydantic
+SCHEMA_EVALUACION_MATCH = {
+    "type": "OBJECT",
+    "properties": {
+        "match_score": {
+            "type": "INTEGER", 
+            "description": "Porcentaje de match real de 0 a 100 basado estrictamente en el cumplimiento de requisitos mínimos."
+        },
+        "justificacion": {
+            "type": "STRING", 
+            "description": "Explicación analítica detallando las fortalezas y debilidades del candidato."
+        },
+        "habilidades_coincidentes": {
+            "type": "ARRAY", 
+            "items": {"type": "STRING"},
+            "description": "Lista de herramientas y tecnologías del CV que coinciden con la vacante."
+        },
+        "habilidades_faltantes": {
+            "type": "ARRAY", 
+            "items": {"type": "STRING"},
+            "description": "Lista de herramientas o tecnologías requeridas ausentes en el CV."
+        }
+    },
+    "required": ["match_score", "justificacion", "habilidades_coincidentes", "habilidades_faltantes"]
+}
+
 
 # =====================================================================
 # 3. CAPA DE INTELIGENCIA Y PROCESAMIENTO (BACKEND DEL APLICATIVO)
@@ -302,7 +328,7 @@ def evaluar_cv_contra_vacante(args):
     
     prompt_usuario = f"""
     Analiza semánticamente la afinidad del candidato con la vacante descrita.
-    Devuelve estrictamente un objeto JSON que cumpla el formato de la clase EvaluacionMatch:
+    Devuelve estrictamente un objeto JSON que cumpla el formato requerido:
     - match_score: entero de 0 a 100.
     - justificacion: string descriptivo.
     - habilidades_coincidentes: array de strings.
@@ -333,13 +359,14 @@ def evaluar_cv_contra_vacante(args):
             system_instruction="Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA."
         )
         
+        # Uso de diccionario SCHEMA_EVALUACION_MATCH nativo para evitar fallas por versiones de Pydantic
         response = model_instance.generate_content(
             prompt_usuario,
-            generation_config=genai.types.GenerationConfig(
-                response_mime_type="application/json", 
-                response_schema=EvaluacionMatch, 
-                temperature=0.1
-            )
+            generation_config={
+                "response_mime_type": "application/json", 
+                "response_schema": SCHEMA_EVALUACION_MATCH, 
+                "temperature": 0.1
+            }
         )
         
         texto_limpio = response.text.strip()
@@ -589,16 +616,16 @@ def main():
                 df_analizar = df_filtrado if not df_filtrado.empty else df_vacantes
                 cv_hash = hashlib.md5(st.session_state["texto_cv_usuario"].encode('utf-8')).hexdigest()
                 
-                MAX_LLM_CALLS = 15
-                # 1. Forzar el texto del CV a minúsculas para una comparación justa
+                # Optimización para limitar el número de llamadas simultáneas y no saturar la cuota de la API
+                MAX_LLM_CALLS = 10
                 texto_cv_min = st.session_state["texto_cv_usuario"].lower()
                 
-                # 2. Filtro rápido e insensible a mayúsculas basado en tus listas limpias de Supabase
+                # Filtro rápido preliminar insensible a mayúsculas basado en competencias limpias
                 df_analizar['score_preliminar'] = df_analizar['hard_skills'].apply(
                     lambda x: sum(1 for s in x if str(s).lower().strip() in texto_cv_min) / len(x) * 100 if x else 0
                 )
                 
-                # 3. Ordenar y seleccionar las 15 mejores vacantes con coincidencias reales
+                # Ordenamos y seleccionamos solo los mejores candidatos estadísticos para Gemini
                 df_analizar = df_analizar.sort_values(by='score_preliminar', ascending=False).head(MAX_LLM_CALLS)
                 
                 payloads = [
@@ -613,7 +640,6 @@ def main():
                 
                 with st.spinner("Comparando analítica ATS con Gemini de forma segura..."):
                     resultados_analisis = []
-                    # Barra de progreso visual para el usuario
                     progreso = st.progress(0)
                     for idx, payload in enumerate(payloads):
                         resultado = evaluar_cv_contra_vacante(payload)
@@ -632,10 +658,9 @@ def main():
                     df_procesado = pd.DataFrame(resultados_analisis)
                     
                     if "match_score" in df_procesado.columns:
-                        # 🚀 LÍNEA DE DEBUG TEMPORAL: Insertada para auditar en vivo sin romper nada
-                        st.write("🔍 DEBUG - Puntajes reales devueltos por Gemini:", df_procesado[["match_score"]].to_dict())
+                        # DEBUG - Visualiza puntajes reales y justificaciones en Streamlit para auditar el flujo
+                        st.write("🔍 DEBUG - Diagnóstico completo:", df_procesado[["match_score", "justificacion"]].to_dict(orient="records"))
                         
-                        # Tu lógica original intacta continúa aquí abajo:
                         df_filtrado_match = df_procesado[df_procesado["match_score"] >= 70]
                         df_resultados = df_filtrado_match.sort_values(by="match_score", ascending=False).head(5).reset_index(drop=True)
                     else:
