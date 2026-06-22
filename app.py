@@ -353,21 +353,35 @@ def evaluar_cv_contra_vacante(args):
         "llave_cache": llave_cache
     }
     
-    try:
-        model_instance = genai.GenerativeModel(
-            model="gemini-1.5-flash",
-            system_instruction="Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA."
-        )
+   try:
+        # Inicialización simple, sin parámetros conflictivos
+        model_instance = genai.GenerativeModel("gemini-1.5-flash")
         
-        # Uso de diccionario SCHEMA_EVALUACION_MATCH nativo para evitar fallas por versiones de Pydantic
+        # Movemos la instrucción del sistema al inicio del prompt
+        prompt_completo = f"""
+        Actúa como un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA.
+        Analiza semánticamente la afinidad del candidato con la vacante descrita.
+        
+        VACANTE OBJETIVO:
+        {detalles_oferta}
+        
+        CURRÍCULUM VITAE DEL CANDIDATO:
+        {texto_cv}
+        
+        Devuelve estrictamente un objeto JSON con: match_score (int), justificacion (str), habilidades_coincidentes (list), habilidades_faltantes (list).
+        """
+        
+        # Llamada al modelo con configuración de esquema
         response = model_instance.generate_content(
-            prompt_usuario,
+            prompt_completo,
             generation_config={
                 "response_mime_type": "application/json", 
                 "response_schema": SCHEMA_EVALUACION_MATCH, 
                 "temperature": 0.1
             }
         )
+        
+        # ... (resto del código igual)
         
         texto_limpio = response.text.strip()
         if texto_limpio.startswith("```json"):
