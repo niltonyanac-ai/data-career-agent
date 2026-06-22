@@ -592,9 +592,15 @@ def main():
                     for _, fila in df_analizar.iterrows()
                 ]
                 
-                with st.spinner("Comparando analítica ATS con Gemini..."):
-                    with ThreadPoolExecutor(max_workers=4) as executor:
-                        resultados_analisis = list(executor.map(evaluar_cv_contra_vacante, payloads))
+                with st.spinner("Comparando analítica ATS con Gemini de forma segura..."):
+                    resultados_analisis = []
+                    # Barra de progreso visual para el usuario
+                    progreso = st.progress(0)
+                    for idx, payload in enumerate(payloads):
+                        resultado = evaluar_cv_contra_vacante(payload)
+                        resultados_analisis.append(resultado)
+                        progreso.progress((idx + 1) / len(payloads))
+                    progreso.empty()
                 
                 # Sincronización limpia de caché
                 for res in resultados_analisis:
