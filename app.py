@@ -401,13 +401,6 @@ def evaluar_cv_contra_vacante(args):
     
     return resultado_base
         
-    except google_exceptions.ResourceExhausted:
-        resultado_base["justificacion"] = "⚠️ Cuota excedida (Rate Limit). Inténtalo de nuevo en unos momentos."
-        return resultado_base
-    except Exception as e:
-        resultado_base["justificacion"] = f"❌ Error de procesamiento: {str(e)}"
-        return resultado_base
-
 def registrar_telemetria_silenciosa(resultados_analisis):
     supabase = obtener_cliente_supabase()
     if not supabase: return
