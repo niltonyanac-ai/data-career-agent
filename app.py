@@ -672,7 +672,7 @@ def main():
                         # Solo pausamos si no es la última iteración
                         if idx < len(payloads) - 1:
                             import time
-                            time.sleep(4.5) 
+                            time.sleep(6) 
                             
                     progreso.empty()
                 
