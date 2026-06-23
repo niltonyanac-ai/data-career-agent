@@ -4,6 +4,7 @@ import random
 import hashlib
 import threading
 import re
+import time
 from typing import List
 import pandas as pd
 import altair as alt
@@ -666,6 +667,13 @@ def main():
                         resultado = evaluar_cv_contra_vacante(payload)
                         resultados_analisis.append(resultado)
                         progreso.progress((idx + 1) / len(payloads))
+                        
+                        # --- PAUSA DE SEGURIDAD PARA EVITAR EL ERROR 429 DE GOOGLE ---
+                        # Solo pausamos si no es la última iteración
+                        if idx < len(payloads) - 1:
+                            import time
+                            time.sleep(4.5) 
+                            
                     progreso.empty()
                 
                 # Sincronización limpia de caché
