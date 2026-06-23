@@ -466,6 +466,17 @@ def cargar_datos_seguros():
 # 5. FUNCIÓN PRINCIPAL DE LA APLICACIÓN (FRONTEND & UX)
 # =====================================================================
 def main():
+    st.set_page_config(page_title="DataCareer AI", layout="wide")
+    st.markdown("<h1 class='main-title'>💼 DataCareer AI — Inteligencia ATS</h1>", unsafe_allow_html=True)
+
+    # --- INSERTA AQUÍ EL BLOQUE DE DIAGNÓSTICO ---
+    st.write("### Diagnóstico de Modelos (Depuración):")
+    try:
+        modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        st.write(f"Modelos disponibles: {modelos}")
+    except Exception as e:
+        st.error(f"Error listando modelos: {e}")
+    # ---------------------------------------------
     df_raw, origen_activo = cargar_datos_seguros()
     df_vacantes = df_raw.copy()
 
