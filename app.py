@@ -639,7 +639,7 @@ def main():
                 df_analizar = df_filtrado if not df_filtrado.empty else df_vacantes
                 cv_hash = hashlib.md5(st.session_state["texto_cv_usuario"].encode('utf-8')).hexdigest()
                 
-                MAX_LLM_CALLS = 15
+                MAX_LLM_CALLS = 8
                 texto_cv_min = st.session_state["texto_cv_usuario"].lower()
                 
                 # Filtro rápido preliminar basado en coincidencia de hard skills
