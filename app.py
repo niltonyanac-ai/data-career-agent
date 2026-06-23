@@ -375,10 +375,11 @@ def evaluar_cv_contra_vacante(args):
             texto_limpio = match.group(0)
             
     except Exception as e:
-        print(f"Error en llamada a Gemini: {e}")
-        # Creamos un JSON de error simulado en texto plano
-        texto_limpio = '{"match_score": 0, "justificacion": "Error al contactar con la IA."}'
-
+        # Limpiamos las comillas del error para que no rompa nuestro JSON
+        mensaje_error = str(e).replace('"', "'").replace('\n', ' ')
+        print(f"Error en llamada a Gemini: {mensaje_error}")
+        texto_limpio = '{"match_score": 0, "justificacion": "Fallo API: ' + mensaje_error + '"}'
+        
     # 2. CONVERSIÓN BLINDADA CONTRA JSONDecodeError
     try:
         evaluacion = json.loads(texto_limpio)
