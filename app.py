@@ -359,7 +359,7 @@ def evaluar_cv_contra_vacante(args):
     
     # LLAMADA DE CASCADA DEFENSIVA (AUDITADA Y COMPATIBLE)
     try:
-        model_instance = genai.GenerativeModel("gemini-1.5-flash-latest")
+        model_instance = genai.GenerativeModel("gemini-3.5-flash")
         # El prompt es el que fuerza el formato JSON, no la configuración
         response = model_instance.generate_content(
             prompt_usuario + "\n\nResponde ESTRICTAMENTE con un objeto JSON. Sin formato Markdown, sin prefijos, sin explicaciones."
