@@ -72,7 +72,7 @@ def generar_mock_ofertas_representativas():
         
         # Paridad con el esquema de Supabase: Guardar como JSON serializado
         ofertas.append({
-            "link_oferta": f"https://www.linkedin.com/jobs/view/simulado-{i+1000}",
+            "link_oferta": f"[https://www.linkedin.com/jobs/view/simulado-](https://www.linkedin.com/jobs/view/simulado-){i+1000}",
             "titulo": titulo,
             "empresa": emp,
             "pais": pais,
@@ -327,6 +327,7 @@ def evaluar_cv_contra_vacante(args):
     """
     
     prompt_usuario = f"""
+    SISTEMA: Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA.
     Analiza semánticamente la afinidad del candidato con la vacante descrita.
     
     VACANTE OBJETIVO:
@@ -356,12 +357,10 @@ def evaluar_cv_contra_vacante(args):
         "llave_cache": llave_cache
     }
     
-    system_instruction_text = "Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA."
-    
     try:
-        # LLAMADA DE CASCADA DEFENSIVA (FALLBACK SEGURO QUE PREVIENE ERRORES DE FIRMA EN EL CONSTRUCTOR)
+        # LLAMADA DE CASCADA DEFENSIVA (SIN INVOCAR 'model=' NI 'system_instruction' PARA PREVENIR TYPEERROR)
         try:
-            # Intento 1: Inicialización simple sin system_instruction en __init__, usando SCHEMA nativo (Evita colisiones de Pydantic)
+            # Intento 1: Inicialización directa posicional utilizando SCHEMA nativo (Evita colisiones de Pydantic)
             model_instance = genai.GenerativeModel("gemini-1.5-flash")
             response = model_instance.generate_content(
                 prompt_usuario,
@@ -374,10 +373,10 @@ def evaluar_cv_contra_vacante(args):
             texto_limpio = response.text.strip()
         except Exception:
             try:
-                # Intento 2: Por si la versión de la API de Google instalada rechaza response_schema en esta versión
+                # Intento 2: Sin validador de esquema de la API (Solo con prompt directo por si la librería está desactualizada)
                 model_instance = genai.GenerativeModel("gemini-1.5-flash")
                 response = model_instance.generate_content(
-                    f"SISTEMA: {system_instruction_text}\n\n{prompt_usuario}\nPor favor, responde estrictamente en formato JSON plano.",
+                    prompt_usuario + "\nPor favor, responde estrictamente en formato JSON plano sin bloques de código.",
                     generation_config={
                         "response_mime_type": "application/json",
                         "temperature": 0.1
@@ -385,10 +384,10 @@ def evaluar_cv_contra_vacante(args):
                 )
                 texto_limpio = response.text.strip()
             except Exception:
-                # Intento 3: Inicialización de compatibilidad heredada usando el parámetro antiguo "model"
-                model_instance = genai.GenerativeModel(model="gemini-1.5-flash")
+                # Intento 3: Inicialización de compatibilidad heredada usando el parámetro antiguo "model_name"
+                model_instance = genai.GenerativeModel(model_name="gemini-1.5-flash")
                 response = model_instance.generate_content(
-                    f"SISTEMA: {system_instruction_text}\n\n{prompt_usuario}\nPor favor, responde estrictamente en formato JSON plano.",
+                    prompt_usuario + "\nPor favor, responde estrictamente en formato JSON plano.",
                     generation_config={
                         "response_mime_type": "application/json",
                         "temperature": 0.1
@@ -405,7 +404,7 @@ def evaluar_cv_contra_vacante(args):
         evaluacion = json.loads(texto_limpio)
         resultado_base.update({
             "match_score": int(evaluacion.get("match_score", 0)),
-            "justificacion": evaluacion.get("justificacion", "Análisis completado exitosamente."),
+            "justificacion": evaluacion.get("justificacion", "Análisis completado."),
             "coincidentes": evaluacion.get("habilidades_coincidentes", []),
             "faltantes": evaluacion.get("habilidades_faltantes", [])
         })
@@ -481,7 +480,7 @@ def cargar_datos_seguros():
             "especialidad_objetivo": e,
             "pais": p,
             "descripcion": f"Requerimos profesionales con dominio estructurado en {', '.join(hs)}. Enfoque en {e}.",
-            "link_oferta": f"https://www.linkedin.com/jobs/view/mock-{i+100}",
+            "link_oferta": f"[https://www.linkedin.com/jobs/view/mock-](https://www.linkedin.com/jobs/view/mock-){i+100}",
             "hard_skills": json.dumps(hs),
             "soft_skills": json.dumps(ss)
         })
