@@ -170,17 +170,17 @@ class EvaluacionMatch(BaseModel):
     habilidades_coincidentes: List[str] = Field(..., description="Lista de habilidades que el candidato sí posee.")
     habilidades_faltantes: List[str] = Field(..., description="Lista de tecnologías, herramientas o requisitos ausentes en el CV.")
 
-# Esquema de diccionario nativo para Gemini para blindar la ejecución frente a conflictos de Pydantic
+# Esquema de diccionario nativo independiente de Pydantic para Gemini
 SCHEMA_EVALUACION_MATCH = {
     "type": "OBJECT",
     "properties": {
         "match_score": {
             "type": "INTEGER", 
-            "description": "Porcentaje de match real de 0 a 100 basado estrictamente en el cumplimiento de requisitos mínimos."
+            "description": "Porcentaje de match real de 0 a 100 basado estrictamente en el cumplimiento de requisitos mínimos de la vacante."
         },
         "justificacion": {
             "type": "STRING", 
-            "description": "Explicación analítica detallando las fortalezas y debilidades del candidato."
+            "description": "Explicación analítica detallando las fortalezas y debilidades de afinidad del candidato."
         },
         "habilidades_coincidentes": {
             "type": "ARRAY", 
@@ -190,7 +190,7 @@ SCHEMA_EVALUACION_MATCH = {
         "habilidades_faltantes": {
             "type": "ARRAY", 
             "items": {"type": "STRING"},
-            "description": "Lista de herramientas o tecnologías requeridas ausentes en el CV."
+            "description": "Lista de tecnologías requeridas ausentes en el CV."
         }
     },
     "required": ["match_score", "justificacion", "habilidades_coincidentes", "habilidades_faltantes"]
@@ -328,17 +328,20 @@ def evaluar_cv_contra_vacante(args):
     
     prompt_usuario = f"""
     Analiza semánticamente la afinidad del candidato con la vacante descrita.
-    Devuelve estrictamente un objeto JSON que cumpla el formato requerido:
-    - match_score: entero de 0 a 100.
-    - justificacion: string descriptivo.
-    - habilidades_coincidentes: array de strings.
-    - habilidades_faltantes: array de strings.
-
+    
     VACANTE OBJETIVO:
     {detalles_oferta}
     
     CURRÍCULUM VITAE DEL CANDIDATO:
     {texto_cv}
+    
+    Devuelve estrictamente un objeto JSON con el siguiente formato exacto:
+    {{
+        "match_score": <entero de 0 a 100 basado en el cumplimiento real de requisitos>,
+        "justificacion": "<explicación analítica clara detallando por qué cumple o no con el perfil>",
+        "habilidades_coincidentes": ["<tecnología u herramienta coincidente 1>", "<tecnología coincidente 2>"],
+        "habilidades_faltantes": ["<tecnología ausente requerida 1>", "<tecnología ausente 2>"]
+    }}
     """
     
     resultado_base = {
@@ -353,37 +356,47 @@ def evaluar_cv_contra_vacante(args):
         "llave_cache": llave_cache
     }
     
-   try:
-        # Inicialización simple, sin parámetros conflictivos
-        model_instance = genai.GenerativeModel("gemini-1.5-flash")
+    system_instruction_text = "Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA."
+    
+    try:
+        # LLAMADA DE CASCADA DEFENSIVA (FALLBACK SEGURO QUE PREVIENE ERRORES DE FIRMA EN EL CONSTRUCTOR)
+        try:
+            # Intento 1: Inicialización simple sin system_instruction en __init__, usando SCHEMA nativo (Evita colisiones de Pydantic)
+            model_instance = genai.GenerativeModel("gemini-1.5-flash")
+            response = model_instance.generate_content(
+                prompt_usuario,
+                generation_config={
+                    "response_mime_type": "application/json", 
+                    "response_schema": SCHEMA_EVALUACION_MATCH, 
+                    "temperature": 0.1
+                }
+            )
+            texto_limpio = response.text.strip()
+        except Exception:
+            try:
+                # Intento 2: Por si la versión de la API de Google instalada rechaza response_schema en esta versión
+                model_instance = genai.GenerativeModel("gemini-1.5-flash")
+                response = model_instance.generate_content(
+                    f"SISTEMA: {system_instruction_text}\n\n{prompt_usuario}\nPor favor, responde estrictamente en formato JSON plano.",
+                    generation_config={
+                        "response_mime_type": "application/json",
+                        "temperature": 0.1
+                    }
+                )
+                texto_limpio = response.text.strip()
+            except Exception:
+                # Intento 3: Inicialización de compatibilidad heredada usando el parámetro antiguo "model"
+                model_instance = genai.GenerativeModel(model="gemini-1.5-flash")
+                response = model_instance.generate_content(
+                    f"SISTEMA: {system_instruction_text}\n\n{prompt_usuario}\nPor favor, responde estrictamente en formato JSON plano.",
+                    generation_config={
+                        "response_mime_type": "application/json",
+                        "temperature": 0.1
+                    }
+                )
+                texto_limpio = response.text.strip()
         
-        # Movemos la instrucción del sistema al inicio del prompt
-        prompt_completo = f"""
-        Actúa como un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA.
-        Analiza semánticamente la afinidad del candidato con la vacante descrita.
-        
-        VACANTE OBJETIVO:
-        {detalles_oferta}
-        
-        CURRÍCULUM VITAE DEL CANDIDATO:
-        {texto_cv}
-        
-        Devuelve estrictamente un objeto JSON con: match_score (int), justificacion (str), habilidades_coincidentes (list), habilidades_faltantes (list).
-        """
-        
-        # Llamada al modelo con configuración de esquema
-        response = model_instance.generate_content(
-            prompt_completo,
-            generation_config={
-                "response_mime_type": "application/json", 
-                "response_schema": SCHEMA_EVALUACION_MATCH, 
-                "temperature": 0.1
-            }
-        )
-        
-        # ... (resto del código igual)
-        
-        texto_limpio = response.text.strip()
+        # Limpieza de bloques de código markdown en el texto devuelto
         if texto_limpio.startswith("```json"):
             texto_limpio = texto_limpio.split("```json")[1].split("```")[0].strip()
         elif texto_limpio.startswith("```"):
@@ -630,16 +643,15 @@ def main():
                 df_analizar = df_filtrado if not df_filtrado.empty else df_vacantes
                 cv_hash = hashlib.md5(st.session_state["texto_cv_usuario"].encode('utf-8')).hexdigest()
                 
-                # Optimización para limitar el número de llamadas simultáneas y no saturar la cuota de la API
-                MAX_LLM_CALLS = 10
+                MAX_LLM_CALLS = 15
                 texto_cv_min = st.session_state["texto_cv_usuario"].lower()
                 
-                # Filtro rápido preliminar insensible a mayúsculas basado en competencias limpias
+                # Filtro rápido preliminar basado en coincidencia de hard skills
                 df_analizar['score_preliminar'] = df_analizar['hard_skills'].apply(
                     lambda x: sum(1 for s in x if str(s).lower().strip() in texto_cv_min) / len(x) * 100 if x else 0
                 )
                 
-                # Ordenamos y seleccionamos solo los mejores candidatos estadísticos para Gemini
+                # Seleccionar las mejores vacantes
                 df_analizar = df_analizar.sort_values(by='score_preliminar', ascending=False).head(MAX_LLM_CALLS)
                 
                 payloads = [
