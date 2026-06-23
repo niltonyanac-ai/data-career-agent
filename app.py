@@ -357,43 +357,18 @@ def evaluar_cv_contra_vacante(args):
         "llave_cache": llave_cache
     }
     
+    # LLAMADA DE CASCADA DEFENSIVA (AUDITADA Y COMPATIBLE)
     try:
-        # LLAMADA DE CASCADA DEFENSIVA (SIN INVOCAR 'model=' NI 'system_instruction' PARA PREVENIR TYPEERROR)
-        try:
-            # Intento 1: Inicialización directa posicional utilizando SCHEMA nativo (Evita colisiones de Pydantic)
-            model_instance = genai.GenerativeModel("gemini-1.5-flash")
-            response = model_instance.generate_content(
-                prompt_usuario,
-                generation_config={
-                    "response_mime_type": "application/json", 
-                    "response_schema": SCHEMA_EVALUACION_MATCH, 
-                    "temperature": 0.1
-                }
-            )
-            texto_limpio = response.text.strip()
-        except Exception:
-            try:
-                # Intento 2: Sin validador de esquema de la API (Solo con prompt directo por si la librería está desactualizada)
-                model_instance = genai.GenerativeModel("gemini-1.5-flash")
-                response = model_instance.generate_content(
-                    prompt_usuario + "\nPor favor, responde estrictamente en formato JSON plano sin bloques de código.",
-                    generation_config={
-                        "response_mime_type": "application/json",
-                        "temperature": 0.1
-                    }
-                )
-                texto_limpio = response.text.strip()
-            except Exception:
-                # Intento 3: Inicialización de compatibilidad heredada usando el parámetro antiguo "model_name"
-                model_instance = genai.GenerativeModel(model_name="gemini-1.5-flash")
-                response = model_instance.generate_content(
-                    prompt_usuario + "\nPor favor, responde estrictamente en formato JSON plano.",
-                    generation_config={
-                        "response_mime_type": "application/json",
-                        "temperature": 0.1
-                    }
-                )
-                texto_limpio = response.text.strip()
+        model_instance = genai.GenerativeModel("gemini-1.5-flash")
+        # El prompt es el que fuerza el formato JSON, no la configuración
+        response = model_instance.generate_content(
+            prompt_usuario + "\n\nResponde ESTRICTAMENTE con un objeto JSON. Sin formato Markdown, sin prefijos, sin explicaciones."
+        )
+        texto_limpio = response.text.replace("```json", "").replace("```", "").strip()
+    except Exception as e:
+        # Fallback de emergencia para que la app no devuelva -100
+        print(f"Error en llamada a Gemini: {e}")
+        texto_limpio = '{"match_score": 0, "justificacion": "Error al contactar con la IA: ' + str(e) + '"}'
         
         # Limpieza de bloques de código markdown en el texto devuelto
         if texto_limpio.startswith("```json"):
