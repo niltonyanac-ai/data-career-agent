@@ -357,33 +357,49 @@ def evaluar_cv_contra_vacante(args):
         "llave_cache": llave_cache
     }
     
-    # LLAMADA DE CASCADA DEFENSIVA (AUDITADA Y COMPATIBLE)
+# LLAMADA DE CASCADA DEFENSIVA (AUDITADA Y COMPATIBLE)
+    import re
+    import json
+
+    # 1. LLAMADA A LA API
     try:
         model_instance = genai.GenerativeModel("gemini-3.5-flash")
-        # El prompt es el que fuerza el formato JSON, no la configuración
         response = model_instance.generate_content(
             prompt_usuario + "\n\nResponde ESTRICTAMENTE con un objeto JSON. Sin formato Markdown, sin prefijos, sin explicaciones."
         )
-        texto_limpio = response.text.replace("```json", "").replace("```", "").strip()
-    except Exception as e:
-        # Fallback de emergencia para que la app no devuelva -100
-        print(f"Error en llamada a Gemini: {e}")
-        texto_limpio = '{"match_score": 0, "justificacion": "Error al contactar con la IA: ' + str(e) + '"}'
+        texto_limpio = response.text.strip()
         
-        # Limpieza de bloques de código markdown en el texto devuelto
-        if texto_limpio.startswith("```json"):
-            texto_limpio = texto_limpio.split("```json")[1].split("```")[0].strip()
-        elif texto_limpio.startswith("```"):
-            texto_limpio = texto_limpio.split("```")[1].split("```")[0].strip()
+        # BÚSQUEDA INTELIGENTE de JSON para ignorar markdown o texto basura
+        match = re.search(r'\{.*\}', texto_limpio, re.DOTALL)
+        if match:
+            texto_limpio = match.group(0)
+            
+    except Exception as e:
+        print(f"Error en llamada a Gemini: {e}")
+        # Creamos un JSON de error simulado en texto plano
+        texto_limpio = '{"match_score": 0, "justificacion": "Error al contactar con la IA."}'
 
+    # 2. CONVERSIÓN BLINDADA CONTRA JSONDecodeError
+    try:
         evaluacion = json.loads(texto_limpio)
-        resultado_base.update({
-            "match_score": int(evaluacion.get("match_score", 0)),
-            "justificacion": evaluacion.get("justificacion", "Análisis completado."),
-            "coincidentes": evaluacion.get("habilidades_coincidentes", []),
-            "faltantes": evaluacion.get("habilidades_faltantes", [])
-        })
-        return resultado_base
+    except json.JSONDecodeError as e:
+        print(f"Error crítico de formato. La IA devolvió: {texto_limpio}")
+        evaluacion = {
+            "match_score": 0, 
+            "justificacion": "La IA no devolvió un formato válido.",
+            "habilidades_coincidentes": [],
+            "habilidades_faltantes": []
+        }
+
+    # 3. ACTUALIZACIÓN DEL RESULTADO Y RETORNO (Fuera de los bloques try/except)
+    resultado_base.update({
+        "match_score": int(evaluacion.get("match_score", 0)),
+        "justificacion": evaluacion.get("justificacion", "Análisis completado."),
+        "coincidentes": evaluacion.get("habilidades_coincidentes", []),
+        "faltantes": evaluacion.get("habilidades_faltantes", [])
+    })
+    
+    return resultado_base
         
     except google_exceptions.ResourceExhausted:
         resultado_base["justificacion"] = "⚠️ Cuota excedida (Rate Limit). Inténtalo de nuevo en unos momentos."
