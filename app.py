@@ -339,23 +339,24 @@ def evaluar_cv_contra_vacante(args):
     }
     
     try:
-        # Corrección: Usamos gemini-1.5-flash que es la versión de producción actual
-        model_instance = genai.GenerativeModel(
-            "gemini-1.5-flash",
-            generation_config={
-                "response_mime_type": "application/json",
-                "response_schema": SCHEMA_EVALUACION_MATCH
-            }
+        # 3. Consolidamos TODA la configuración en una sola instancia, incluyendo tu esquema estricto
+        configuracion_segura = genai.GenerationConfig(
+            response_mime_type="application/json",
+            response_schema=SCHEMA_EVALUACION_MATCH,
+            temperature=0.2 # Temperatura baja para precisión determinista
         )
         
+        # Usamos el motor principal de producción validado
+        model_instance = genai.GenerativeModel("gemini-1.5-flash")
+        
         try:
-            # 3. Llamada a Gemini con el prompt que contiene TODO el contexto
+            # 4. Llamamos a Gemini pasando el prompt completo y las reglas sin sobreescribirlas
             response = model_instance.generate_content(
                 prompt_completo, 
-                generation_config=generation_config
+                generation_config=configuracion_segura
             )
             
-            # 4. Procesamiento seguro de la respuesta
+            # 5. Procesamiento seguro de la respuesta
             evaluacion = json.loads(response.text.strip())
             
             resultado_base.update({
@@ -367,12 +368,23 @@ def evaluar_cv_contra_vacante(args):
             
         except (json.JSONDecodeError, AttributeError, Exception) as e:
             print(f"⚠️ Error en procesamiento de IA: {e}")
-            resultado_base.update({
-                "match_score": 0,
-                "justificacion": "Error al procesar el análisis con IA. Por favor, intenta de nuevo.",
-                "coincidentes": [],
-                "faltantes": []
-            })
+            # Contingencia: Si el texto llega con backticks de markdown (```json), intentamos limpiarlo
+            try:
+                texto_limpio = response.text.strip().removeprefix("```json").removesuffix("```").strip()
+                evaluacion = json.loads(texto_limpio)
+                resultado_base.update({
+                    "match_score": max(0, min(100, int(evaluacion.get("match_score", 0)))),
+                    "justificacion": evaluacion.get("justificacion", "Análisis completado."),
+                    "coincidentes": evaluacion.get("habilidades_coincidentes", []),
+                    "faltantes": evaluacion.get("habilidades_faltantes", [])
+                })
+            except:
+                resultado_base.update({
+                    "match_score": 0,
+                    "justificacion": "Error al procesar el análisis con IA. Por favor, intenta de nuevo.",
+                    "coincidentes": [],
+                    "faltantes": []
+                })
         
     except google_exceptions.ResourceExhausted as e:
         resultado_base["justificacion"] = "Fallo de cuota transitorio (429 Rate Limit). Reintentando en el próximo lote seguro."
