@@ -412,7 +412,7 @@ def cargar_datos_seguros():
 # 5. FUNCIÓN PRINCIPAL DE LA APLICACIÓN (FRONTEND & UX)
 # =====================================================================
 def main():
-    st.markdown("<h1 class='main-title'>💼 DataCareer AI — Inteligencia ATS</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 class='main-title'>💼 Agente AI Empleo — Inteligencia ATS</h1>", unsafe_allow_html=True)
 
     df_raw, origen_activo = cargar_datos_seguros()
     df_vacantes = df_raw.copy()
@@ -480,7 +480,7 @@ def main():
         (df_vacantes['especialidad_objetivo'].isin(especialidades_seleccionadas))
     ].reset_index(drop=True)
 
-    st.markdown("<h1 class='main-title'>💼 Mercado laboral LATAM para Data & Analytics</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 class='main-title'>Mercado laboral LATAM para Data & Analytics</h1>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Ofertas Vigentes Filtradas", len(df_filtrado))
