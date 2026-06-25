@@ -87,14 +87,14 @@ def obtener_cliente_supabase():
     return None
 
 SCHEMA_EVALUACION_MATCH = {
-    "type": "OBJECT",
+    "type": "object",
     "properties": {
         "match_score": {
-            "type": "INTEGER", 
+            "type": "integer", 
             "description": "Porcentaje de match real de 0 a 100 basado estrictamente en el cumplimiento de requisitos mínimos de la vacante."
         },
         "justificacion": {
-            "type": "STRING", 
+            "type": "string", 
             "description": "Explicación analítica detallando las fortalezas y debilidades de afinidad del candidato."
         },
         "habilidades_coincidentes": {
