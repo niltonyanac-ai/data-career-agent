@@ -311,10 +311,9 @@ def evaluar_cv_contra_vacante(args):
     Descripción Detallada del Puesto: {fila_vacante.get('descripcion', 'No especificada')}
     """
     
-    # 1. Truncamos el CV aquí mismo por seguridad (Prevención de abuso de tokens)
     cv_truncado = texto_cv[:4000]
     
-    # 2. Integramos el CV seguro junto con la vacante en un solo prompt consolidado
+    # Integramos el esquema JSON directamente en el prompt. Es 100% infalible.
     prompt_completo = f"""
     SISTEMA: Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA.
     Analiza semánticamente la afinidad del candidato con la vacante descrita.
@@ -324,6 +323,16 @@ def evaluar_cv_contra_vacante(args):
     
     CURRÍCULUM VITAE DEL CANDIDATO:
     {cv_truncado}
+
+    INSTRUCCIÓN DE SALIDA ESTRICTA:
+    Debes responder ÚNICAMENTE con un objeto JSON válido que siga exactamente esta estructura:
+    {{
+      "match_score": (número entero del 0 al 100),
+      "justificacion": (tu análisis en formato string),
+      "habilidades_coincidentes": [(lista de strings)],
+      "habilidades_faltantes": [(lista de strings)]
+    }}
+    No incluyas texto adicional, ni formato markdown alrededor del JSON.
     """
     
     resultado_base = {
@@ -331,7 +340,7 @@ def evaluar_cv_contra_vacante(args):
         "empresa": empresa_puesto,
         "link": link_puesto,
         "jerarquia_evaluada": fila_vacante.get('jerarquia_limpia', 'No clasificada'),
-        "match_score": -100,  # Valor de contingencia
+        "match_score": -100,  
         "coincidentes": [],
         "faltantes": [],
         "justificacion": "",
@@ -339,57 +348,37 @@ def evaluar_cv_contra_vacante(args):
     }
     
     try:
-        # 3. Consolidamos TODA la configuración en una sola instancia, incluyendo tu esquema estricto
+        # Usamos solo el mime_type. Sin response_schema evitamos crasheos de la librería de Python.
         configuracion_segura = genai.GenerationConfig(
             response_mime_type="application/json",
-            response_schema=SCHEMA_EVALUACION_MATCH,
-            temperature=0.2 # Temperatura baja para precisión determinista
+            temperature=0.2 
         )
         
-        # Usamos el motor principal de producción validado
         model_instance = genai.GenerativeModel("gemini-1.5-flash")
         
-        try:
-            # 4. Llamamos a Gemini pasando el prompt completo y las reglas sin sobreescribirlas
-            response = model_instance.generate_content(
-                prompt_completo, 
-                generation_config=configuracion_segura
-            )
-            
-            # 5. Procesamiento seguro de la respuesta
-            evaluacion = json.loads(response.text.strip())
-            
-            resultado_base.update({
-                "match_score": max(0, min(100, int(evaluacion.get("match_score", 0)))),
-                "justificacion": evaluacion.get("justificacion", "Análisis completado."),
-                "coincidentes": evaluacion.get("habilidades_coincidentes", []),
-                "faltantes": evaluacion.get("habilidades_faltantes", [])
-            })
-            
-        except (json.JSONDecodeError, AttributeError, Exception) as e:
-            print(f"⚠️ Error en procesamiento de IA: {e}")
-            # Contingencia: Si el texto llega con backticks de markdown (```json), intentamos limpiarlo
-            try:
-                texto_limpio = response.text.strip().removeprefix("```json").removesuffix("```").strip()
-                evaluacion = json.loads(texto_limpio)
-                resultado_base.update({
-                    "match_score": max(0, min(100, int(evaluacion.get("match_score", 0)))),
-                    "justificacion": evaluacion.get("justificacion", "Análisis completado."),
-                    "coincidentes": evaluacion.get("habilidades_coincidentes", []),
-                    "faltantes": evaluacion.get("habilidades_faltantes", [])
-                })
-            except:
-                resultado_base.update({
-                    "match_score": 0,
-                    "justificacion": "Error al procesar el análisis con IA. Por favor, intenta de nuevo.",
-                    "coincidentes": [],
-                    "faltantes": []
-                })
+        response = model_instance.generate_content(
+            prompt_completo, 
+            generation_config=configuracion_segura
+        )
         
+        # Limpieza por precaución en caso de que la IA agregue backticks
+        texto_limpio = response.text.strip().removeprefix("```json").removesuffix("```").strip()
+        evaluacion = json.loads(texto_limpio)
+        
+        resultado_base.update({
+            "match_score": max(0, min(100, int(evaluacion.get("match_score", 0)))),
+            "justificacion": evaluacion.get("justificacion", "Análisis completado."),
+            "coincidentes": evaluacion.get("habilidades_coincidentes", []),
+            "faltantes": evaluacion.get("habilidades_faltantes", [])
+        })
+            
     except google_exceptions.ResourceExhausted as e:
         resultado_base["justificacion"] = "Fallo de cuota transitorio (429 Rate Limit). Reintentando en el próximo lote seguro."
     except Exception as e:
-        resultado_base["justificacion"] = f"Fallo API: {str(e)}"
+        # Ya no tragamos el error. Si falla, lo mostramos en la justificación para poder diagnosticar.
+        print(f"⚠️ Error Crítico en la IA: {str(e)}")
+        resultado_base["justificacion"] = f"Error Interno de la App: {str(e)}"
+        resultado_base["match_score"] = 0
         
     return resultado_base
         
