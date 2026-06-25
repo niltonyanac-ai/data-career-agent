@@ -28,11 +28,6 @@ def obtener_prompt_seguro(texto_cv):
 # 1. CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT Y ESTILOS UI
 # =====================================================================
 st.set_page_config(
-# ... (continúa tu código)
-# =====================================================================
-# 1. CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT Y ESTILOS UI
-# =====================================================================
-st.set_page_config(
     page_title="Agente-AI-Empleo",
     page_icon="💼",
     layout="wide",
