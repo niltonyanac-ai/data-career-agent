@@ -19,6 +19,16 @@ import streamlit as st
 import google.generativeai as genai
 import google.api_core.exceptions as google_exceptions
 
+def obtener_prompt_seguro(texto_cv):
+    """Limpia y trunca el CV para prevenir prompt injection y abuso de tokens."""
+    texto_truncado = texto_cv[:4000] # Limite de seguridad de 4000 caracteres
+    return f"Analiza este CV para una vacante de Data & Analytics: {texto_truncado}"
+
+# =====================================================================
+# 1. CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT Y ESTILOS UI
+# =====================================================================
+st.set_page_config(
+# ... (continúa tu código)
 # =====================================================================
 # 1. CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT Y ESTILOS UI
 # =====================================================================
@@ -110,7 +120,18 @@ SCHEMA_EVALUACION_MATCH = {
     },
     "required": ["match_score", "justificacion", "habilidades_coincidentes", "habilidades_faltantes"]
 }
+# ... (al final de tu código, justo después de cerrar SCHEMA_EVALUACION_MATCH)
 
+# --- INSERCIÓN: Configuración de mitigación para Gemini ---
+generation_config = genai.GenerationConfig(
+    response_mime_type="application/json",
+    temperature=0.2  # Temperatura baja para respuestas deterministas y seguras
+)
+
+# Esto lo usarás más adelante cuando llames al modelo dentro de tus funciones:
+# model = genai.GenerativeModel('gemini-1.5-flash', generation_config=generation_config)
+
+# ... (continúa con el resto de tu app.py)
 # =====================================================================
 # 2. CAPA DE INTELIGENCIA Y MOCKS DE DATOS
 # =====================================================================
@@ -163,14 +184,23 @@ def cargar_vacantes_a_supabase():
         return
         
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    ofertas = generar_mock_ofertas_representativas()
     
-    print(f"Iniciando carga masiva de {len(ofertas)} ofertas indexadas...")
     try:
+        # --- NUEVA CAPA DE SEGURIDAD: Mantenimiento ---
+        # Borramos vacantes de más de 30 días para proteger el espacio gratuito
+        limite = (pd.Timestamp.utcnow() - pd.Timedelta(days=30)).isoformat()
+        supabase.table("vacantes").delete().lt("created_at", limite).execute()
+        
+        # --- CARGA MASIVA ---
+        ofertas = generar_mock_ofertas_representativas()
+        print(f"Iniciando carga masiva de {len(ofertas)} ofertas...")
+        
+        # Insertamos el nuevo lote
         respuesta = supabase.table("vacantes").insert(ofertas).execute()
-        print(f"¡Procesamiento finalizado con éxito! {len(respuesta.data)} registros nuevos indexados.")
+        print(f"✅ Sincronización exitosa. {len(respuesta.data)} vacantes vigentes.")
+        
     except Exception as e:
-        print(f"❌ Fallo crítico en la inserción masiva: {str(e)}")
+        print(f"❌ Fallo crítico en la sincronización: {str(e)}")
 
 # =====================================================================
 # 3. PROCESAMIENTO, NORMALIZACIÓN Y MATEMÁTICA ATS
@@ -324,7 +354,17 @@ def evaluar_cv_contra_vacante(args):
             }
         )
         
-        response = model_instance.generate_content(prompt_usuario)
+# --- BLOQUE BLINDADO DE SEGURIDAD ---
+        # 1. Aplicamos el filtro de seguridad sobre el texto base
+        prompt_protegido = obtener_prompt_seguro(texto_cv_del_usuario)
+        
+        # 2. Llamada a Gemini con la configuración estricta de JSON
+        response = model_instance.generate_content(
+            prompt_protegido, 
+            generation_config=generation_config
+        )
+        
+        # 3. Procesamiento seguro de la respuesta
         evaluacion = json.loads(response.text.strip())
         
         resultado_base.update({
