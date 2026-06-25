@@ -314,16 +314,11 @@ def evaluar_cv_contra_vacante(args):
     cv_truncado = texto_cv[:4000]
     
     # Integramos el esquema JSON directamente en el prompt. Es 100% infalible.
+# 2. Integramos el CV seguro y FORZAMOS EL ESQUEMA EN EL PROMPT
     prompt_completo = f"""
     SISTEMA: Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA.
     Analiza semánticamente la afinidad del candidato con la vacante descrita.
     
-    VACANTE OBJETIVO:
-    {detalles_oferta}
-    
-    CURRÍCULUM VITAE DEL CANDIDATO:
-    {cv_truncado}
-
     INSTRUCCIÓN DE SALIDA ESTRICTA:
     Debes responder ÚNICAMENTE con un objeto JSON válido que siga exactamente esta estructura:
     {{
@@ -333,6 +328,12 @@ def evaluar_cv_contra_vacante(args):
       "habilidades_faltantes": [(lista de strings)]
     }}
     No incluyas texto adicional, ni formato markdown alrededor del JSON.
+    
+    VACANTE OBJETIVO:
+    {detalles_oferta}
+    
+    CURRÍCULUM VITAE DEL CANDIDATO:
+    {cv_truncado}
     """
     
     resultado_base = {
@@ -348,12 +349,13 @@ def evaluar_cv_contra_vacante(args):
     }
     
     try:
-        # Usamos solo el mime_type. Sin response_schema evitamos crasheos de la librería de Python.
+        # 3. Configuración segura SIN response_schema para evitar conflictos de versión
         configuracion_segura = genai.GenerationConfig(
             response_mime_type="application/json",
             temperature=0.2 
         )
         
+        # Usamos el motor principal de producción validado
         model_instance = genai.GenerativeModel("gemini-1.5-flash")
         
         response = model_instance.generate_content(
