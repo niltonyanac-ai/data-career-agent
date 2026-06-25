@@ -349,25 +349,36 @@ def evaluar_cv_contra_vacante(args):
             }
         )
         
-# --- BLOQUE BLINDADO DE SEGURIDAD ---
-        # 1. Aplicamos el filtro de seguridad sobre el texto base
+# --- BLOQUE BLINDADO DE SEGURIDAD Y TOLERANCIA ---
+        # 1. Aplicamos el filtro de seguridad
         prompt_protegido = obtener_prompt_seguro(texto_cv_del_usuario)
         
-        # 2. Llamada a Gemini con la configuración estricta de JSON
-        response = model_instance.generate_content(
-            prompt_protegido, 
-            generation_config=generation_config
-        )
-        
-        # 3. Procesamiento seguro de la respuesta
-        evaluacion = json.loads(response.text.strip())
-        
-        resultado_base.update({
-            "match_score": max(0, min(100, int(evaluacion.get("match_score", 0)))),
-            "justificacion": evaluacion.get("justificacion", "Análisis completado."),
-            "coincidentes": evaluacion.get("habilidades_coincidentes", []),
-            "faltantes": evaluacion.get("habilidades_faltantes", [])
-        })
+        # 2. Llamada a Gemini
+        try:
+            response = model_instance.generate_content(
+                prompt_protegido, 
+                generation_config=generation_config
+            )
+            
+            # 3. Procesamiento seguro de la respuesta
+            evaluacion = json.loads(response.text.strip())
+            
+            resultado_base.update({
+                "match_score": max(0, min(100, int(evaluacion.get("match_score", 0)))),
+                "justificacion": evaluacion.get("justificacion", "Análisis completado."),
+                "coincidentes": evaluacion.get("habilidades_coincidentes", []),
+                "faltantes": evaluacion.get("habilidades_faltantes", [])
+            })
+            
+        except (json.JSONDecodeError, AttributeError, Exception) as e:
+            # Si algo falla en la IA, no rompemos la app, devolvemos un estado neutral
+            print(f"⚠️ Error en procesamiento de IA: {e}")
+            resultado_base.update({
+                "match_score": 0,
+                "justificacion": "Error al procesar el análisis con IA. Por favor, intenta de nuevo.",
+                "coincidentes": [],
+                "faltantes": []
+            })
         
     except google_exceptions.ResourceExhausted as e:
         resultado_base["justificacion"] = "Fallo de cuota transitorio (429 Rate Limit). Reintentando en el próximo lote seguro."
