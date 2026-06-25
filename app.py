@@ -19,11 +19,6 @@ import streamlit as st
 import google.generativeai as genai
 import google.api_core.exceptions as google_exceptions
 
-def obtener_prompt_seguro(texto_cv):
-    """Limpia y trunca el CV para prevenir prompt injection y abuso de tokens."""
-    texto_truncado = texto_cv[:4000] # Limite de seguridad de 4000 caracteres
-    return f"Analiza este CV para una vacante de Data & Analytics: {texto_truncado}"
-
 # =====================================================================
 # 1. CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT Y ESTILOS UI
 # =====================================================================
@@ -316,7 +311,11 @@ def evaluar_cv_contra_vacante(args):
     Descripción Detallada del Puesto: {fila_vacante.get('descripcion', 'No especificada')}
     """
     
-    prompt_usuario = f"""
+    # 1. Truncamos el CV aquí mismo por seguridad (Prevención de abuso de tokens)
+    cv_truncado = texto_cv[:4000]
+    
+    # 2. Integramos el CV seguro junto con la vacante en un solo prompt consolidado
+    prompt_completo = f"""
     SISTEMA: Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA.
     Analiza semánticamente la afinidad del candidato con la vacante descrita.
     
@@ -324,7 +323,7 @@ def evaluar_cv_contra_vacante(args):
     {detalles_oferta}
     
     CURRÍCULUM VITAE DEL CANDIDATO:
-    {texto_cv}
+    {cv_truncado}
     """
     
     resultado_base = {
@@ -340,27 +339,23 @@ def evaluar_cv_contra_vacante(args):
     }
     
     try:
-        # Configuración nativa del modelo con esquema estructurado obligatorio (Ahorro tokens)
+        # Corrección: Usamos gemini-1.5-flash que es la versión de producción actual
         model_instance = genai.GenerativeModel(
-            "gemini-2.5-flash",
+            "gemini-1.5-flash",
             generation_config={
                 "response_mime_type": "application/json",
                 "response_schema": SCHEMA_EVALUACION_MATCH
             }
         )
         
-# --- BLOQUE BLINDADO DE SEGURIDAD Y TOLERANCIA ---
-        # 1. Aplicamos el filtro de seguridad
-        prompt_protegido = obtener_prompt_seguro(texto_cv_del_usuario)
-        
-        # 2. Llamada a Gemini
         try:
+            # 3. Llamada a Gemini con el prompt que contiene TODO el contexto
             response = model_instance.generate_content(
-                prompt_protegido, 
+                prompt_completo, 
                 generation_config=generation_config
             )
             
-            # 3. Procesamiento seguro de la respuesta
+            # 4. Procesamiento seguro de la respuesta
             evaluacion = json.loads(response.text.strip())
             
             resultado_base.update({
@@ -371,7 +366,6 @@ def evaluar_cv_contra_vacante(args):
             })
             
         except (json.JSONDecodeError, AttributeError, Exception) as e:
-            # Si algo falla en la IA, no rompemos la app, devolvemos un estado neutral
             print(f"⚠️ Error en procesamiento de IA: {e}")
             resultado_base.update({
                 "match_score": 0,
