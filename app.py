@@ -5,6 +5,7 @@ import hashlib
 import threading
 import re
 import time
+import sys
 from typing import List
 import pandas as pd
 import altair as alt
@@ -19,90 +20,7 @@ import google.generativeai as genai
 import google.api_core.exceptions as google_exceptions
 
 # =====================================================================
-# 1. CONFIGURACIÓN DE VARIABLES DE ENTORNO Y SUPABASE (BACKEND)
-# =====================================================================
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "TU_SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "TU_SUPABASE_KEY")
-
-def generar_mock_ofertas_representativas():
-    """Genera una muestra estadística robusta de vacantes estructuradas en Data, BI e IA"""
-    roles = ["Data Scientist", "Analista de BI", "Data Engineer", "AI Engineer", "Gerente de Analítica", "Data Analyst"]
-    empresas = ["BCP", "Interbank", "Rímac", "Alicorp", "Belcorp", "Inetum", "NTT DATA", "Globant", "Scotiabank", "Mindrift"]
-    paises = ["Perú", "Colombia", "Chile", "México", "Remoto Latam"]
-    
-    jerarquias = [
-        "Practicante / Asistente", 
-        "Analista Junior", 
-        "Analista / Profesional", 
-        "Analista Senior / Especialista", 
-        "Líder / Jefe", 
-        "Gerente / Head"
-    ]
-    
-    especialidades = [
-        "Data Science", 
-        "Business Intelligence", 
-        "Data Engineering", 
-        "Artificial Intelligence", 
-        "Data Management",
-        "Data Analytics"
-    ]
-    
-    pool_hard_skills = {
-        "Data Science": ["Python", "R", "Machine Learning", "Scikit-Learn", "SQL", "AWS", "Docker"],
-        "Business Intelligence": ["Power BI", "SQL", "Tableau", "ETL", "Excel", "Data Warehouse", "DAX"],
-        "Data Engineering": ["Python", "SQL", "Spark", "Airflow", "Snowflake", "Databricks", "AWS", "Azure"],
-        "Artificial Intelligence": ["Python", "PyTorch", "TensorFlow", "LLMs", "LangChain", "OpenAI API", "NLP"],
-        "Data Management": ["Gobierno de Datos", "Data Quality", "SQL", "Collibra", "Scrum", "KPIs"],
-        "Data Analytics": ["Python", "SQL", "Excel", "Estadística Inferencial", "A/B Testing", "Mixpanel"]
-    }
-    
-    pool_soft_skills = ["Comunicación Asertiva", "Liderazgo", "Resolución de Problemas", "Trabajo en Equipo", "Pensamiento Crítico", "Negociación"]
-    
-    ofertas = []
-    for i in range(200):
-        esp = random.choice(especialidades)
-        rol = random.choice(roles) if esp != "Business Intelligence" else "Analista de BI"
-        nivel = random.choice(jerarquias)
-        titulo = f"{rol} ({nivel})"
-        
-        h_skills = random.sample(pool_hard_skills[esp], k=min(4, len(pool_hard_skills[esp])))
-        s_skills = random.sample(pool_soft_skills, k=3)
-        emp = random.choice(empresas)
-        pais = random.choice(paises)
-        
-        # Paridad con el esquema de Supabase: Guardar como JSON serializado
-        ofertas.append({
-            "link_oferta": f"[https://www.linkedin.com/jobs/view/simulado-](https://www.linkedin.com/jobs/view/simulado-){i+1000}",
-            "titulo": titulo,
-            "empresa": emp,
-            "pais": pais,
-            "jerarquia": nivel,
-            "especialidad_objetivo": esp,
-            "descripcion": f"Buscamos un {titulo} para unirse al equipo de {emp} en {pais}. Requisitos clave: {', '.join(h_skills)}. Capacidad de {', '.join(s_skills)}.",
-            "hard_skills": json.dumps(h_skills),
-            "soft_skills": json.dumps(s_skills)
-        })
-    return ofertas
-
-def cargar_vacantes_a_supabase():
-    if SUPABASE_URL == "TU_SUPABASE_URL":
-        print("⚠️ Configura las variables de entorno de Supabase.")
-        return
-        
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    ofertas = generar_mock_ofertas_representativas()
-    
-    print(f"Iniciando carga masiva de {len(ofertas)} ofertas indexadas...")
-    try:
-        respuesta = supabase.table("vacantes").insert(ofertas).execute()
-        print(f"¡Procesamiento finalizado con éxito! {len(respuesta.data)} registros nuevos indexados.")
-    except Exception as e:
-        print(f"❌ Fallo crítico en la inserción masiva: {str(e)}")
-
-
-# =====================================================================
-# 2. CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT Y ESTILOS UI
+# 1. CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT Y ESTILOS UI
 # =====================================================================
 st.set_page_config(
     page_title="DataCareer AI",
@@ -142,6 +60,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "TU_SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "TU_SUPABASE_KEY")
+
 if "texto_cv_usuario" not in st.session_state:
     st.session_state["texto_cv_usuario"] = ""
 if "ats_cache" not in st.session_state:
@@ -165,13 +86,6 @@ def obtener_cliente_supabase():
             return None
     return None
 
-class EvaluacionMatch(BaseModel):
-    match_score: int = Field(..., description="Porcentaje de match real de 0 a 100 basado estrictamente en el cumplimiento de requisitos.")
-    justificacion: str = Field(..., description="Explicación analítica clara detallando por qué cumple o no con el perfil.")
-    habilidades_coincidentes: List[str] = Field(..., description="Lista de habilidades que el candidato sí posee.")
-    habilidades_faltantes: List[str] = Field(..., description="Lista de tecnologías, herramientas o requisitos ausentes en el CV.")
-
-# Esquema de diccionario nativo independiente de Pydantic para Gemini
 SCHEMA_EVALUACION_MATCH = {
     "type": "OBJECT",
     "properties": {
@@ -197,42 +111,89 @@ SCHEMA_EVALUACION_MATCH = {
     "required": ["match_score", "justificacion", "habilidades_coincidentes", "habilidades_faltantes"]
 }
 
+# =====================================================================
+# 2. CAPA DE INTELIGENCIA Y MOCKS DE DATOS
+# =====================================================================
+def generar_mock_ofertas_representativas():
+    roles = ["Data Scientist", "Analista de BI", "Data Engineer", "AI Engineer", "Gerente de Analítica", "Data Analyst"]
+    empresas = ["BCP", "Interbank", "Rímac", "Alicorp", "Belcorp", "Inetum", "NTT DATA", "Globant", "Scotiabank", "Mindrift"]
+    paises = ["Perú", "Colombia", "Chile", "México", "Remoto Latam"]
+    jerarquias = ["Practicante / Asistente", "Analista Junior", "Analista / Profesional", "Analista Senior / Especialista", "Líder / Jefe", "Gerente / Head"]
+    especialidades = ["Data Science", "Business Intelligence", "Data Engineering", "Artificial Intelligence", "Data Management", "Data Analytics"]
+    
+    pool_hard_skills = {
+        "Data Science": ["Python", "R", "Machine Learning", "Scikit-Learn", "SQL", "AWS", "Docker"],
+        "Business Intelligence": ["Power BI", "SQL", "Tableau", "ETL", "Excel", "Data Warehouse", "DAX"],
+        "Data Engineering": ["Python", "SQL", "Spark", "Airflow", "Snowflake", "Databricks", "AWS", "Azure"],
+        "Artificial Intelligence": ["Python", "PyTorch", "TensorFlow", "LLMs", "LangChain", "OpenAI API", "NLP"],
+        "Data Management": ["Gobierno de Datos", "Data Quality", "SQL", "Collibra", "Scrum", "KPIs"],
+        "Data Analytics": ["Python", "SQL", "Excel", "Estadística Inferencial", "A/B Testing", "Mixpanel"]
+    }
+    
+    pool_soft_skills = ["Comunicación Asertiva", "Liderazgo", "Resolución de Problemas", "Trabajo en Equipo", "Pensamiento Crítico", "Negociación"]
+    
+    ofertas = []
+    for i in range(200):
+        esp = random.choice(especialidades)
+        rol = random.choice(roles) if esp != "Business Intelligence" else "Analista de BI"
+        nivel = random.choice(jerarquias)
+        titulo = f"{rol} ({nivel})"
+        
+        h_skills = random.sample(pool_hard_skills[esp], k=min(4, len(pool_hard_skills[esp])))
+        s_skills = random.sample(pool_soft_skills, k=3)
+        emp = random.choice(empresas)
+        pais = random.choice(paises)
+        
+        ofertas.append({
+            "link_oferta": f"https://www.linkedin.com/jobs/view/simulado-{i+1000}",
+            "titulo": titulo,
+            "empresa": emp,
+            "pais": pais,
+            "jerarquia": nivel,
+            "especialidad_objetivo": esp,
+            "descripcion": f"Buscamos un {titulo} para unirse al equipo de {emp} en {pais}. Requisitos clave: {', '.join(h_skills)}. Capacidad de {', '.join(s_skills)}.",
+            "hard_skills": json.dumps(h_skills),
+            "soft_skills": json.dumps(s_skills)
+        })
+    return ofertas
+
+def cargar_vacantes_a_supabase():
+    if SUPABASE_URL == "TU_SUPABASE_URL":
+        print("⚠️ Configura las variables de entorno de Supabase.")
+        return
+        
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    ofertas = generar_mock_ofertas_representativas()
+    
+    print(f"Iniciando carga masiva de {len(ofertas)} ofertas indexadas...")
+    try:
+        respuesta = supabase.table("vacantes").insert(ofertas).execute()
+        print(f"¡Procesamiento finalizado con éxito! {len(respuesta.data)} registros nuevos indexados.")
+    except Exception as e:
+        print(f"❌ Fallo crítico en la inserción masiva: {str(e)}")
 
 # =====================================================================
-# 3. CAPA DE INTELIGENCIA Y PROCESAMIENTO (BACKEND DEL APLICATIVO)
+# 3. PROCESAMIENTO, NORMALIZACIÓN Y MATEMÁTICA ATS
 # =====================================================================
 def normalizar_lista(val):
-    # 1. Validación segura de nulos
     if val is None:
         return []
-    
-    # 2. Si ya es una lista nativa (Caso de Supabase Real)
     if isinstance(val, list):
         return [str(item).strip() for item in val if item]
-    
-    # 3. Si es un valor flotante nulo (NaN tradicional de Pandas)
     if isinstance(val, float) and pd.isna(val):
         return []
-        
-    # 4. Si viene como cadena de texto
     if isinstance(val, str):
         val_clean = val.strip()
         if not val_clean or val_clean.lower() in ['none', 'nan', '[]']:
             return []
-        
-        # Si la cadena emula una lista de tipo '["SQL", "Python"]'
         if val_clean.startswith('[') and val_clean.endswith(']'):
             try:
-                import json
                 parsed = json.loads(val_clean)
                 if isinstance(parsed, list):
                     return [str(item).strip() for item in parsed if item]
             except Exception:
                 pass
-                
-        # String común separado por comas
         return [item.strip() for item in val_clean.split(',') if item.strip()]
-    
     return []
 
 def normalizar_jerarquia(texto):
@@ -304,6 +265,9 @@ def extraer_texto_pdf(archivo_pdf):
         st.error(f"Error al procesar el archivo PDF: {str(e)}")
         return ""
 
+# =====================================================================
+# 4. CORE DE EVALUACIÓN SEMÁNTICA CON GEMINI AI
+# =====================================================================
 def evaluar_cv_contra_vacante(args):
     texto_cv = args["texto_cv"]
     fila_vacante = args["fila_vacante"]
@@ -336,14 +300,6 @@ def evaluar_cv_contra_vacante(args):
     
     CURRÍCULUM VITAE DEL CANDIDATO:
     {texto_cv}
-    
-    Devuelve estrictamente un objeto JSON con el siguiente formato exacto:
-    {{
-        "match_score": <entero de 0 a 100 basado en el cumplimiento real de requisitos>,
-        "justificacion": "<explicación analítica clara detallando por qué cumple o no con el perfil>",
-        "habilidades_coincidentes": ["<tecnología u herramienta coincidente 1>", "<tecnología coincidente 2>"],
-        "habilidades_faltantes": ["<tecnología ausente requerida 1>", "<tecnología ausente 2>"]
-    }}
     """
     
     resultado_base = {
@@ -351,56 +307,38 @@ def evaluar_cv_contra_vacante(args):
         "empresa": empresa_puesto,
         "link": link_puesto,
         "jerarquia_evaluada": fila_vacante.get('jerarquia_limpia', 'No clasificada'),
-        "match_score": -100,  # Valor de contingencia robusta frente a excepciones
+        "match_score": -100,  # Valor de contingencia
         "coincidentes": [],
         "faltantes": [],
         "justificacion": "",
         "llave_cache": llave_cache
     }
     
-# LLAMADA DE CASCADA DEFENSIVA (AUDITADA Y COMPATIBLE)
-    import re
-    import json
-
-    # 1. LLAMADA A LA API
     try:
-        model_instance = genai.GenerativeModel("gemini-3.5-flash")
-        response = model_instance.generate_content(
-            prompt_usuario + "\n\nResponde ESTRICTAMENTE con un objeto JSON. Sin formato Markdown, sin prefijos, sin explicaciones."
+        # Configuración nativa del modelo con esquema estructurado obligatorio (Ahorro tokens)
+        model_instance = genai.GenerativeModel(
+            "gemini-3.5-flash",
+            generation_config={
+                "response_mime_type": "application/json",
+                "response_schema": SCHEMA_EVALUACION_MATCH
+            }
         )
-        texto_limpio = response.text.strip()
         
-        # BÚSQUEDA INTELIGENTE de JSON para ignorar markdown o texto basura
-        match = re.search(r'\{.*\}', texto_limpio, re.DOTALL)
-        if match:
-            texto_limpio = match.group(0)
-            
+        response = model_instance.generate_content(prompt_usuario)
+        evaluacion = json.loads(response.text.strip())
+        
+        resultado_base.update({
+            "match_score": max(0, min(100, int(evaluacion.get("match_score", 0)))),
+            "justificacion": evaluacion.get("justificacion", "Análisis completado."),
+            "coincidentes": evaluacion.get("habilidades_coincidentes", []),
+            "faltantes": evaluacion.get("habilidades_faltantes", [])
+        })
+        
+    except google_exceptions.ResourceExhausted as e:
+        resultado_base["justificacion"] = "Fallo de cuota transitorio (429 Rate Limit). Reintentando en el próximo lote seguro."
     except Exception as e:
-        # Limpiamos las comillas del error para que no rompa nuestro JSON
-        mensaje_error = str(e).replace('"', "'").replace('\n', ' ')
-        print(f"Error en llamada a Gemini: {mensaje_error}")
-        texto_limpio = '{"match_score": 0, "justificacion": "Fallo API: ' + mensaje_error + '"}'
+        resultado_base["justificacion"] = f"Fallo API: {str(e)}"
         
-    # 2. CONVERSIÓN BLINDADA CONTRA JSONDecodeError
-    try:
-        evaluacion = json.loads(texto_limpio)
-    except json.JSONDecodeError as e:
-        print(f"Error crítico de formato. La IA devolvió: {texto_limpio}")
-        evaluacion = {
-            "match_score": 0, 
-            "justificacion": "La IA no devolvió un formato válido.",
-            "habilidades_coincidentes": [],
-            "habilidades_faltantes": []
-        }
-
-    # 3. ACTUALIZACIÓN DEL RESULTADO Y RETORNO (Fuera de los bloques try/except)
-    resultado_base.update({
-        "match_score": int(evaluacion.get("match_score", 0)),
-        "justificacion": evaluacion.get("justificacion", "Análisis completado."),
-        "coincidentes": evaluacion.get("habilidades_coincidentes", []),
-        "faltantes": evaluacion.get("habilidades_faltantes", [])
-    })
-    
     return resultado_base
         
 def registrar_telemetria_silenciosa(resultados_analisis):
@@ -421,9 +359,6 @@ def registrar_telemetria_silenciosa(resultados_analisis):
         pass
 
 
-# =====================================================================
-# 4. FLUJO DE CONEXIÓN DE DATOS Y CONTINGENCIA LOCAL
-# =====================================================================
 @st.cache_data(ttl=600)
 def cargar_datos_seguros():
     supabase = obtener_cliente_supabase()
@@ -466,7 +401,7 @@ def cargar_datos_seguros():
             "especialidad_objetivo": e,
             "pais": p,
             "descripcion": f"Requerimos profesionales con dominio estructurado en {', '.join(hs)}. Enfoque en {e}.",
-            "link_oferta": f"[https://www.linkedin.com/jobs/view/mock-](https://www.linkedin.com/jobs/view/mock-){i+100}",
+            "link_oferta": f"https://www.linkedin.com/jobs/view/mock-{i+100}",
             "hard_skills": json.dumps(hs),
             "soft_skills": json.dumps(ss)
         })
@@ -477,17 +412,8 @@ def cargar_datos_seguros():
 # 5. FUNCIÓN PRINCIPAL DE LA APLICACIÓN (FRONTEND & UX)
 # =====================================================================
 def main():
-    st.set_page_config(page_title="DataCareer AI", layout="wide")
     st.markdown("<h1 class='main-title'>💼 DataCareer AI — Inteligencia ATS</h1>", unsafe_allow_html=True)
 
-    # --- INSERTA AQUÍ EL BLOQUE DE DIAGNÓSTICO ---
-    st.write("### Diagnóstico de Modelos (Depuración):")
-    try:
-        modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        st.write(f"Modelos disponibles: {modelos}")
-    except Exception as e:
-        st.error(f"Error listando modelos: {e}")
-    # ---------------------------------------------
     df_raw, origen_activo = cargar_datos_seguros()
     df_vacantes = df_raw.copy()
 
@@ -520,7 +446,6 @@ def main():
     df_vacantes['pais'] = df_vacantes.apply(inferir_pais_por_datos, axis=1)
     df_vacantes['jerarquia_limpia'] = df_vacantes['jerarquia'].apply(normalizar_jerarquia)
 
-    # Normalización proactiva de competencias antes de cualquier visualización
     df_vacantes['hard_skills'] = df_vacantes['hard_skills'].apply(normalizar_lista)
     df_vacantes['soft_skills'] = df_vacantes['soft_skills'].apply(normalizar_lista)
 
@@ -559,7 +484,7 @@ def main():
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Ofertas Vigentes Filtradas", len(df_filtrado))
-    col2.metric("Última Sincronización", "19/06/2026 22:20")
+    col2.metric("Última Sincronización", "25/06/2026 10:45")
     col3.metric("Origen Activo", origen_activo)
 
     tab_mercado, tab_evaluador = st.tabs(["📊 Tablero Analítico", "🔍 Evaluador ATS de CV"])
@@ -639,16 +564,12 @@ def main():
                 df_analizar = df_filtrado if not df_filtrado.empty else df_vacantes
                 cv_hash = hashlib.md5(st.session_state["texto_cv_usuario"].encode('utf-8')).hexdigest()
                 
-                MAX_LLM_CALLS = 8
-                texto_cv_min = st.session_state["texto_cv_usuario"].lower()
+                # --- OPTIMIZACIÓN GRATUITA ---
+                # Usamos el modelo matemático TF-IDF para enviar solo las 4 mejores ofertas a Gemini
+                MAX_LLM_CALLS = 4
                 
-                # Filtro rápido preliminar basado en coincidencia de hard skills
-                df_analizar['score_preliminar'] = df_analizar['hard_skills'].apply(
-                    lambda x: sum(1 for s in x if str(s).lower().strip() in texto_cv_min) / len(x) * 100 if x else 0
-                )
-                
-                # Seleccionar las mejores vacantes
-                df_analizar = df_analizar.sort_values(by='score_preliminar', ascending=False).head(MAX_LLM_CALLS)
+                df_analizar = pre_ranking_ats_vectorial(df_analizar, st.session_state["texto_cv_usuario"])
+                df_analizar = df_analizar.head(MAX_LLM_CALLS)
                 
                 payloads = [
                     {
@@ -668,15 +589,13 @@ def main():
                         resultados_analisis.append(resultado)
                         progreso.progress((idx + 1) / len(payloads))
                         
-                        # --- PAUSA DE SEGURIDAD PARA EVITAR EL ERROR 429 DE GOOGLE ---
-                        # Solo pausamos si no es la última iteración
+                        # --- PAUSA DE SEGURIDAD RPM ---
+                        # Pausa de 13 segundos para respetar el límite gratuito (5 Requests Per Minute)
                         if idx < len(payloads) - 1:
-                            import time
-                            time.sleep(6) 
+                            time.sleep(13) 
                             
                     progreso.empty()
                 
-                # Sincronización limpia de caché
                 for res in resultados_analisis:
                     if "llave_cache" in res and res.get("match_score", -100) >= 0:
                         st.session_state["ats_cache"][res["llave_cache"]] = res
@@ -687,11 +606,9 @@ def main():
                     df_procesado = pd.DataFrame(resultados_analisis)
                     
                     if "match_score" in df_procesado.columns:
-                        # DEBUG - Visualiza puntajes reales y justificaciones en Streamlit para auditar el flujo
-                        st.write("🔍 DEBUG - Diagnóstico completo:", df_procesado[["match_score", "justificacion"]].to_dict(orient="records"))
-                        
+                        #st.write("🔍 DEBUG - Diagnóstico completo:", df_procesado[["match_score", "justificacion"]].to_dict(orient="records"))
                         df_filtrado_match = df_procesado[df_procesado["match_score"] >= 70]
-                        df_resultados = df_filtrado_match.sort_values(by="match_score", ascending=False).head(5).reset_index(drop=True)
+                        df_resultados = df_filtrado_match.sort_values(by="match_score", ascending=False).reset_index(drop=True)
                     else:
                         df_resultados = pd.DataFrame()
                 else:
@@ -704,10 +621,17 @@ def main():
                     
                     for idx, res in df_resultados.iterrows():
                         score = res["match_score"]
-                        color_badge = "#2ecc71"
-                        link_html = f'<a href="{res["link"]}" target="_blank" class="action-link">🎯 Ver Vacante Activa en {res["empresa"]}</a>' if res.get("link") else ""
                         
-                        st.markdown(f"""
+                        if score >= 85:
+                            color_badge = "#16a34a"  # Verde corporativo
+                        elif score >= 75:
+                            color_badge = "#ca8a04"  # Ámbar
+                        else:
+                            color_badge = "#2563eb"  # Azul informativo
+                        
+                        link_html = f'<a href="{res["link"]}" target="_blank" class="action-link">🎯 Ver Vacante Activa en {res["empresa"]}</a>'
+                        
+                        st.markdown(f'''
                         <div class="match-card">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #f1f5f9; padding-bottom: 10px;">
                                 <h4 style="margin: 0; color: #1e3a8a; font-size: 1.25em;">
@@ -728,10 +652,9 @@ def main():
                             </div>
                             {link_html}
                         </div>
-                        """, unsafe_allow_html=True)
+                        ''', unsafe_allow_html=True)
 
 if __name__ == "__main__":
-    import sys
     if len(sys.argv) > 1 and sys.argv[1] == "load_data":
         cargar_vacantes_a_supabase()
     else:
