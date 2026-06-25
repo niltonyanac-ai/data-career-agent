@@ -23,7 +23,7 @@ import google.api_core.exceptions as google_exceptions
 # 1. CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT Y ESTILOS UI
 # =====================================================================
 st.set_page_config(
-    page_title="DataCareer AI",
+    page_title="Agente-AI-Empleo",
     page_icon="💼",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -317,7 +317,7 @@ def evaluar_cv_contra_vacante(args):
     try:
         # Configuración nativa del modelo con esquema estructurado obligatorio (Ahorro tokens)
         model_instance = genai.GenerativeModel(
-            "gemini-3.5-flash",
+            "gemini-2.5-flash",
             generation_config={
                 "response_mime_type": "application/json",
                 "response_schema": SCHEMA_EVALUACION_MATCH
@@ -468,7 +468,7 @@ def main():
     especialidades_seleccionadas = st.sidebar.multiselect("Especialidad Funcional", options=lista_especialidades, default=lista_especialidades)
 
     st.sidebar.markdown("---")
-    if st.sidebar.button("🧹 Limpiar Caché", use_container_width=True):
+    if st.sidebar.button("🧹 Limpiar Caché", width='stretch'):
         st.session_state["ats_cache"] = {}
         st.session_state["texto_cv_usuario"] = ""
         st.cache_data.clear()
@@ -480,7 +480,7 @@ def main():
         (df_vacantes['especialidad_objetivo'].isin(especialidades_seleccionadas))
     ].reset_index(drop=True)
 
-    st.markdown("<h1 class='main-title'>💼 DataCareer AI — Inteligencia de Mercado Data & Analytics</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 class='main-title'>💼 Mercado laboral LATAM para Data & Analytics</h1>", unsafe_allow_html=True)
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Ofertas Vigentes Filtradas", len(df_filtrado))
@@ -500,7 +500,7 @@ def main():
                     x=alt.X('count():Q', title="Vacantes"),
                     tooltip=['jerarquia_limpia', 'count()']
                 ).properties(height=280)
-                st.altair_chart(g1, use_container_width=True)
+                st.altair_chart(g1, width='stretch')
 
                 st.markdown("#### **Top Hard Skills más Demandadas**")
                 df_hard = df_filtrado.explode('hard_skills')
@@ -511,7 +511,7 @@ def main():
                         x=alt.X('count():Q', title="Apariciones"),
                         tooltip=['hard_skills', 'count()']
                     ).properties(height=280)
-                    st.altair_chart(g3, use_container_width=True)
+                    st.altair_chart(g3, width='stretch')
 
             with c2:
                 st.markdown("#### **Demanda por Especialidad Funcional**")
@@ -520,7 +520,7 @@ def main():
                     x=alt.X('count():Q', title="Vacantes"),
                     tooltip=['especialidad_objetivo', 'count()']
                 ).properties(height=280)
-                st.altair_chart(g2, use_container_width=True)
+                st.altair_chart(g2, width='stretch')
 
                 st.markdown("#### **Top Soft Skills Requeridas**")
                 df_soft = df_filtrado.explode('soft_skills')
@@ -531,7 +531,7 @@ def main():
                         x=alt.X('count():Q', title="Apariciones"),
                         tooltip=['soft_skills', 'count()']
                     ).properties(height=280)
-                    st.altair_chart(g4, use_container_width=True)
+                    st.altair_chart(g4, width='stretch')
 
             st.markdown("---")
             st.markdown("#### **Explorador Detallado de Ofertas Laborales**")
@@ -542,7 +542,7 @@ def main():
                     "empresa": st.column_config.TextColumn("Organización"),
                     "link_oferta": st.column_config.LinkColumn("Enlace Postulación", display_text="🎯 Ver Vacante en LinkedIn")
                 },
-                use_container_width=True,
+                width='stretch',
                 hide_index=True
             )
 
