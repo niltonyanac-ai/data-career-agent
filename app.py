@@ -606,7 +606,8 @@ def main():
                         "texto_cv": st.session_state["texto_cv_usuario"],
                         "fila_vacante": fila,
                         "cache_dict": st.session_state["ats_cache"],
-                        "cv_hash": cv_hash
+                        "cv_hash": cv_hash,
+                        "model": model  # <--- AQUÍ ESTÁ LA SOLUCIÓN
                     }
                     for _, fila in df_analizar.iterrows()
                 ]
