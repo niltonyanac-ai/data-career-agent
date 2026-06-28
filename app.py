@@ -334,43 +334,7 @@ def evaluar_cv_contra_vacante(args):
 # NOTA: Ahora, el bloque 'try...except' que seguía a continuación en tu código 
 # original puede eliminarse, ya que la lógica determinista no falla por 
 # parseo de JSON ni requiere reintentos complejos.
-    
-    try:
-        # 3. Configuración segura SIN response_schema para evitar conflictos de versión
-        configuracion_segura = genai.GenerationConfig(
-            response_mime_type="application/json",
-            temperature=0.2 
-        )
-        
-        # Usamos el motor principal de producción validado
-        model_instance = genai.GenerativeModel("gemini-1.5-flash")
-        
-        response = model_instance.generate_content(
-            prompt_completo, 
-            generation_config=configuracion_segura
-        )
-        
-        # Limpieza por precaución en caso de que la IA agregue backticks
-        texto_limpio = response.text.strip().removeprefix("```json").removesuffix("```").strip()
-        evaluacion = json.loads(texto_limpio)
-        
-        resultado_base.update({
-            "match_score": max(0, min(100, int(evaluacion.get("match_score", 0)))),
-            "justificacion": evaluacion.get("justificacion", "Análisis completado."),
-            "coincidentes": evaluacion.get("habilidades_coincidentes", []),
-            "faltantes": evaluacion.get("habilidades_faltantes", [])
-        })
-            
-    except google_exceptions.ResourceExhausted as e:
-        resultado_base["justificacion"] = "Fallo de cuota transitorio (429 Rate Limit). Reintentando en el próximo lote seguro."
-    except Exception as e:
-        # Ya no tragamos el error. Si falla, lo mostramos en la justificación para poder diagnosticar.
-        print(f"⚠️ Error Crítico en la IA: {str(e)}")
-        resultado_base["justificacion"] = f"Error Interno de la App: {str(e)}"
-        resultado_base["match_score"] = 0
-        
-    return resultado_base
-        
+         
 def registrar_telemetria_silenciosa(resultados_analisis):
     supabase = obtener_cliente_supabase()
     if not supabase: return
