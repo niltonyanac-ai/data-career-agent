@@ -120,10 +120,12 @@ generation_config = genai.GenerationConfig(
     temperature=0.2  # Temperatura baja para respuestas deterministas y seguras
 )
 
-# Esto lo usarás más adelante cuando llames al modelo dentro de tus funciones:
-# model = genai.GenerativeModel('gemini-1.5-flash', generation_config=generation_config)
-
-# ... (continúa con el resto de tu app.py)
+# Inicializamos el modelo de forma persistente para toda la sesión
+if "model" not in st.session_state:
+    st.session_state["model"] = genai.GenerativeModel(
+        'gemini-1.5-flash', 
+        generation_config=generation_config
+    )
 # =====================================================================
 # 2. CAPA DE INTELIGENCIA Y MOCKS DE DATOS
 # =====================================================================
@@ -571,7 +573,7 @@ def main():
                         "fila_vacante": fila,
                         "cache_dict": st.session_state["ats_cache"],
                         "cv_hash": cv_hash,
-                        "model": model  # <--- AQUÍ ESTÁ LA SOLUCIÓN
+                        "model": st.session_state["model"]  # <--- ACCESO CORRECTO AL ESTADO
                     }
                     for _, fila in df_analizar.iterrows()
                 ]
