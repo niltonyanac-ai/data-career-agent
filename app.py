@@ -18,6 +18,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 import streamlit as st
 import google.generativeai as genai
 import google.api_core.exceptions as google_exceptions
+from ats import extraer_perfil_cv, calcular_score_matematico
+from config import PESOS_ATS
 
 # =====================================================================
 # 1. CONFIGURACIÓN DE LA PÁGINA DE STREAMLIT Y ESTILOS UI
@@ -286,67 +288,52 @@ def extraer_texto_pdf(archivo_pdf):
         return ""
 
 # =====================================================================
-# 4. CORE DE EVALUACIÓN SEMÁNTICA CON GEMINI AI
+# 4. CORE DE EVALUACIÓN DETERMINISTA (MATEMÁTICO + LLM EXTRACCIÓN)
 # =====================================================================
 def evaluar_cv_contra_vacante(args):
+    """
+    Motor ATS determinista:
+    1. Extrae entidades con LLM (una vez por CV).
+    2. Calcula el Score con matemática pura en Python (Acción 1, 5, 8).
+    """
     texto_cv = args["texto_cv"]
     fila_vacante = args["fila_vacante"]
     cv_hash = args["cv_hash"]
+    cache_dict = args["cache_dict"]
+    model = args["model"]
     
-    titulo_puesto = fila_vacante.get('titulo')
-    empresa_puesto = fila_vacante.get('empresa') or "Empresa No Especificada"
-    link_puesto = fila_vacante.get('link_oferta')
-    
-    llave_vacante = f"{titulo_puesto}_{empresa_puesto}_{link_puesto}"
+    # Construcción de llave de caché optimizada
+    llave_vacante = f"{fila_vacante.get('titulo')}_{fila_vacante.get('empresa')}_{fila_vacante.get('link_oferta')}"
     llave_cache = f"{cv_hash}_{llave_vacante}"
     
-    if llave_cache in args["cache_dict"]:
-        return args["cache_dict"][llave_cache]
+    if llave_cache in cache_dict:
+        return cache_dict[llave_cache]
 
-    detalles_oferta = f"""
-    Título de la Oferta: {titulo_puesto}
-    Empresa: {empresa_puesto}
-    Especialidad Funcional: {fila_vacante.get('especialidad_objetivo', 'No especificado')}
-    Jerarquía Requerida: {fila_vacante.get('jerarquia_limpia', 'No específica')}
-    Descripción Detallada del Puesto: {fila_vacante.get('descripcion', 'No especificada')}
-    """
+    # 1. Extracción del perfil (Aprovechamos que es determinista y cacheable)
+    perfil_cv = extraer_perfil_cv(texto_cv, model)
     
-    cv_truncado = texto_cv[:4000]
+    # 2. Cálculo del score matemático (Motor 100% Python)
+    resultado = calcular_score_matematico(perfil_cv, fila_vacante)
     
-    # Integramos el esquema JSON directamente en el prompt. Es 100% infalible.
-# 2. Integramos el CV seguro y FORZAMOS EL ESQUEMA EN EL PROMPT
-    prompt_completo = f"""
-    SISTEMA: Eres un validador ATS experto en reclutamiento corporativo para Data, Analítica, Business Intelligence e IA.
-    Analiza semánticamente la afinidad del candidato con la vacante descrita.
-    
-    INSTRUCCIÓN DE SALIDA ESTRICTA:
-    Debes responder ÚNICAMENTE con un objeto JSON válido que siga exactamente esta estructura:
-    {{
-      "match_score": (número entero del 0 al 100),
-      "justificacion": (tu análisis en formato string),
-      "habilidades_coincidentes": [(lista de strings)],
-      "habilidades_faltantes": [(lista de strings)]
-    }}
-    No incluyas texto adicional, ni formato markdown alrededor del JSON.
-    
-    VACANTE OBJETIVO:
-    {detalles_oferta}
-    
-    CURRÍCULUM VITAE DEL CANDIDATO:
-    {cv_truncado}
-    """
-    
-    resultado_base = {
-        "titulo": titulo_puesto,
-        "empresa": empresa_puesto,
-        "link": link_puesto,
+    # 3. Formateo para compatibilidad con la UI actual
+    resultado_final = {
+        "titulo": fila_vacante.get('titulo'),
+        "empresa": fila_vacante.get('empresa') or "Empresa No Especificada",
+        "link": fila_vacante.get('link_oferta'),
         "jerarquia_evaluada": fila_vacante.get('jerarquia_limpia', 'No clasificada'),
-        "match_score": -100,  
-        "coincidentes": [],
-        "faltantes": [],
-        "justificacion": "",
+        "match_score": resultado["match_score"],
+        "coincidentes": resultado["coincidentes"],
+        "faltantes": resultado["faltantes"],
+        "justificacion": resultado["desglose_texto"], # Se muestra el desglose visual en la UI
         "llave_cache": llave_cache
     }
+    
+    cache_dict[llave_cache] = resultado_final
+    return resultado_final
+
+# NOTA: Ahora, el bloque 'try...except' que seguía a continuación en tu código 
+# original puede eliminarse, ya que la lógica determinista no falla por 
+# parseo de JSON ni requiere reintentos complejos.
     
     try:
         # 3. Configuración segura SIN response_schema para evitar conflictos de versión
@@ -681,17 +668,20 @@ def main():
                                     {res.get('titulo')} <span style="color: #6b7280; font-size: 0.85em; font-weight: normal;">({res.get('empresa')})</span>
                                 </h4>
                                 <span style="background-color: {color_badge}; color: white; padding: 6px 14px; border-radius: 20px; font-weight: bold; font-size: 0.9em; white-space: nowrap;">
-                                    {score}% Match
+                                    {res.get('match_score')}% Match
                                 </span>
                             </div>
-                            <div style="margin-bottom: 12px; color: #334155; font-size: 0.95em; line-height: 1.5;">
-                                <strong>Análisis Estratégico ATS:</strong> {res.get('justificacion')}
+                            
+                            <div style="margin-bottom: 15px; background-color: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0;">
+                                <strong style="color: #334155; font-size: 0.9em;">Desglose del Score:</strong>
+                                <pre style="margin: 8px 0 0 0; font-family: 'Courier New', Courier, monospace; font-size: 0.85em; color: #475569; white-space: pre-wrap;">{res.get('justificacion')}</pre>
                             </div>
+
                             <div style="margin-bottom: 8px; font-size: 0.9em; color: #16a34a;">
-                                <strong>✓ Habilidades Coincidentes:</strong> {', '.join(res.get('coincidentes', [])) if res.get('coincidentes') else 'Ninguna detectada explícitamente.'}
+                                <strong>✓ Habilidades Coincidentes:</strong> {', '.join(res.get('coincidentes', [])) if res.get('coincidentes') else 'Ninguna detectada.'}
                             </div>
                             <div style="margin-bottom: 12px; font-size: 0.9em; color: #dc2626;">
-                                <strong>✗ Brechas Técnicas:</strong> {', '.join(res.get('faltantes', [])) if res.get('faltantes') else 'Ninguna brecha crítica detectada.'}
+                                <strong>✗ Brechas Técnicas:</strong> {', '.join(res.get('faltantes', [])) if res.get('faltantes') else 'Ninguna brecha crítica.'}
                             </div>
                             {link_html}
                         </div>
